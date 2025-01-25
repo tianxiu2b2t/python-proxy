@@ -18,6 +18,8 @@ pri_sni_context: dict[str, ssl.SSLContext] = {}
 pri_context_port: dict[ssl.SSLContext, int] = {}
 forward_tasks: deque[asyncio.Task] = deque()
 pri_tasks: deque[asyncio.Task] = deque()
+pub_servers: dict[int, asyncio.Server] = {}
+pri_servers: dict[int, asyncio.Server] = {}
 
 async def init():
     instance = acme_zerossl.ACMEZeroSSL(
@@ -128,6 +130,8 @@ async def _forward(
 async def _start_pub_server_tcp(
     port: int,
 ):
+    if port in pub_servers:
+        return
     server = await asyncio.start_server(
         _pub_handle_tcp,
         '',
@@ -158,6 +162,7 @@ async def _start_pri_server_tcp(
         port=0,
         ssl=context
     )
+    pri_servers[server.sockets[0].getsockname()[1]] = server
     pri_context_port[context] = server.sockets[0].getsockname()[1]
     await server.start_serving()
     logger.info(f"Private server start on {server.sockets[0].getsockname()[1]}")
@@ -180,6 +185,10 @@ async def start_server(
     await _start_pri_server_tcp(context)
 
 async def unload():
+    for server in pri_servers.values():
+        server.close()
+    for server in pub_servers.values():
+        server.close()
     for task in pub_tcp_port_tasks.values():
         task.cancel()
     for task in pri_tcp_port_tasks.values():
