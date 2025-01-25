@@ -31,11 +31,12 @@ async def init():
     await instance.init()
     await start_server(80, None)
     for proxy in config.config.get("proxies", []):
-        hosts, port, subdomains, url = proxy["hosts"], proxy["port"], subdomains["subdomains"], proxy["url"]
+        hosts, ports, subdomains, url = proxy["hosts"], proxy["ports"], proxy["subdomains"], proxy["url"]
         for host in hosts:
             add_proxy(host, url)
         cert = await instance.get_certificate(*subdomains)
-        await start_server(port, cert)
+        for port in ports:
+            await start_server(port, cert)
 
 
 async def _pub_handle_tcp(
