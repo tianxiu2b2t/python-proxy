@@ -383,6 +383,8 @@ async def process_http1(client: Client, sni: Optional[str] = None):
                 await conn.close()
             except:
                 return
+    except asyncio.TimeoutError:
+        await client.write(build_error_http_response(503, "Service Unavailable", "HTTP/1.1"))
     except:
         logger.traceback()
 
