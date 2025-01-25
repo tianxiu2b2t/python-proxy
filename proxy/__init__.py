@@ -137,6 +137,7 @@ async def _start_pub_server_tcp(
         '',
         port=port
     )
+    pub_servers[port] = server
     await server.start_serving()
     logger.info(f"Public server start on {port}")
 
