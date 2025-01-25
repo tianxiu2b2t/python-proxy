@@ -16,7 +16,18 @@ BUFFER = 1024 * 1024 * 4
 forward_address: dict[tuple[str, int], tuple[str, int]] = {}
 forward_address_count: defaultdict[tuple[str, int], int] = defaultdict(int)
 forward_address_info: dict[tuple[str, int], 'ForwardAddressInfo'] = {}
-proxy_url: dict[str, urlparse.ParseResult] = {}
+proxy_url: dict[str, 'Proxy'] = {}
+
+class Proxy:
+    def __init__(
+        self,
+        url: urlparse.ParseResult,
+        forward_ip_headers: list[str] = []
+    ):
+        self.url = url
+        self.forward_ip_headers = forward_ip_headers
+
+
 
 class ForwardAddressInfo:
     def __init__(
@@ -304,11 +315,11 @@ async def process_http1(client: Client, sni: Optional[str] = None):
     if config.host not in proxy_url:
         return
     proxy = proxy_url[config.host]
-    config.scheme = proxy.scheme or "http"
-    config.port = get_parse_url_port(proxy)
-    config.ip = proxy.hostname or "127.0.0.1"
+    config.scheme = proxy.url.scheme or "http"
+    config.port = get_parse_url_port(proxy.url)
+    config.ip = proxy.url.hostname or "127.0.0.1"
     context = None
-    if proxy.scheme == "https":
+    if proxy.url.scheme == "https":
         context = ssl.create_default_context()
         context.load_default_certs()
         context.set_default_verify_paths()
@@ -327,13 +338,17 @@ async def process_http1(client: Client, sni: Optional[str] = None):
             ConnectionRefusedError,
             ssl.SSLZeroReturnError,
             ssl.SSLError,
-            asyncio.CancelledError
+            asyncio.CancelledError,
+            GeneratorExit
         ):
             return
         except:
             logger.traceback()
         finally:
-            await conn.close()
+            try:
+                await conn.close()
+            except:
+                return
     except:
         logger.traceback()
 
@@ -374,5 +389,5 @@ def get_parse_url_port(url: urlparse.ParseResult):
         return 80
     return 80
 
-def add_proxy(host: str, url: str):
-    proxy_url[host] = urlparse.urlparse(url)
+def add_proxy(host: str, proxy: Proxy):
+    proxy_url[host] = proxy

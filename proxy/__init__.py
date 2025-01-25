@@ -7,7 +7,7 @@ import config
 from logger import logger
 import utils
 
-from .common import Client, find_origin_ip, get_origin_info, process, ForwardAddress, add_proxy
+from .common import Client, Proxy, find_origin_ip, get_origin_info, process, ForwardAddress, add_proxy
 from service import acme_zerossl, dns
 
 SUPPORT_PROTOCOLS = []#["h2", "http/1.1"]
@@ -31,9 +31,16 @@ async def init():
     await instance.init()
     await start_server(80, None)
     for proxy in config.config.get("proxies", []):
-        hosts, ports, subdomains, url = proxy["hosts"], proxy["ports"], proxy["subdomains"], proxy["url"]
+        hosts = proxy["hosts"]
+        ports = proxy["ports"]
+        subdomains = proxy["subdomains"]
+        url = proxy["url"]
+        forward_ip_headers = proxy.get("forward_ip_headers", [])
         for host in hosts:
-            add_proxy(host, url)
+            add_proxy(host, Proxy(
+                url,
+                forward_ip_headers
+            ))
         cert = await instance.get_certificate(*subdomains)
         for port in ports:
             await start_server(port, cert)
