@@ -1,6 +1,7 @@
 import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass
+import datetime
 import enum
 import ssl
 import time
@@ -27,7 +28,8 @@ class Proxy:
         self.url = urlparse.urlparse(url)
         self.forward_ip_headers = forward_ip_headers
 
-
+class HTTPInvalidResponse(Exception):
+    pass
 
 class ForwardAddressInfo:
     def __init__(
@@ -175,6 +177,7 @@ class HTTPConfig:
     current_user_agent: str
     current_host: str
     keepalive: Optional[asyncio.Future] = None
+    accepted: bool = False
 
 async def _process_http1_req(
     client: Client,
@@ -229,7 +232,10 @@ async def _process_http1_resp(
     config: HTTPConfig
 ):
     while not conn.is_closing and (buffer := await conn.read(16384)):
+        if b"\r\n\r\n" not in buffer:
+            raise HTTPInvalidResponse("Invalid HTTP response")
         end_resp = time.perf_counter_ns()
+        config.accepted = True
         byte_header, byte_body = buffer.split(b"\r\n\r\n", 1)
         conn.feed_data(byte_body)
         pre_byte_header, byte_header = byte_header.split(b"\r\n", 1)
@@ -297,9 +303,31 @@ async def _process_http1_resp(
             except:
                 ...
 
+def build_error_http_response(
+    status: int,
+    reason: str,
+    version: str,
+    headers: Header = Header({
+        "Connection": "close",
+        "Server": "Python-Proxy",
+        "Date": datetime.datetime.now().strftime("%a, %d %b %Y %H:%M:%S GMT"),
+    }),
+) -> bytes:
+    content = f"{status} {reason}".encode("utf-8")
+    byte_header = f"{version} {status} {reason}\r\n"
+    headers["Content-Length"] = len(content)
+    headers["Content-Type"] = "text/html; charset=utf-8"
+    for k, v in headers.items():
+        byte_header += f"{k}: {v}\r\n"
+    byte_header += "\r\n"
+    return byte_header.encode("utf-8") + content
+
+    
+
 async def process_http1(client: Client, sni: Optional[str] = None):
     buffer = await client.read(4096)
     if b"\r\n\r\n" not in buffer:
+        await client.write(build_error_http_response(400, "Bad Request", "HTTP/1.1"))
         return
     
     byte_header, byte_body = buffer.split(b"\r\n\r\n", 1)
@@ -313,6 +341,7 @@ async def process_http1(client: Client, sni: Optional[str] = None):
     config = HTTPConfig()
     config.host = urlparse.urlparse(f'http://{sni or headers.get("Host", "localhost")}').hostname or ""
     if config.host not in proxy_url:
+        await client.write(build_error_http_response(400, "Bad Request", "HTTP/1.1"))
         return
     proxy = proxy_url[config.host]
     config.scheme = proxy.url.scheme or "http"
@@ -341,6 +370,11 @@ async def process_http1(client: Client, sni: Optional[str] = None):
             asyncio.CancelledError,
             GeneratorExit
         ):
+            if not config.accepted:
+                await client.write(build_error_http_response(502, "Bad Gateway", config.version))
+            return
+        except HTTPInvalidResponse:
+            await client.write(build_error_http_response(502, "Bad Gateway", config.version))
             return
         except:
             logger.traceback()

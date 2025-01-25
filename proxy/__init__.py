@@ -53,30 +53,33 @@ async def _pub_handle_tcp(
     writer: asyncio.StreamWriter
 ):
     client = Client(reader, writer)
-    buffer = await client.read(16384)
-    if not utils.ssl.is_ssl_or_tls_data(buffer):
-        client.feed_data(buffer)
-        await process(client)
-        return
+    try:
+        buffer = await client.read(16384)
+        if not utils.ssl.is_ssl_or_tls_data(buffer):
+            client.feed_data(buffer)
+            await process(client)
+            return
 
-    sni = utils.ssl.get_client_handshake_info(buffer)
-    if sni.sni is None:
-        await client.close()
-        return
-    context = pri_sni_context.get(sni.sni)
-    if context is None:
-        await client.close()
-        return
-    pri_port = pri_context_port.get(context)
-    if pri_port is None:
-        await client.close()
-        return
-    client.feed_data(buffer)
-    _start_forward(
-        client,
-        pri_port,
-        sni.sni
-    )
+        sni = utils.ssl.get_client_handshake_info(buffer)
+        if sni.sni is None:
+            await client.close()
+            return
+        context = pri_sni_context.get(sni.sni)
+        if context is None:
+            await client.close()
+            return
+        pri_port = pri_context_port.get(context)
+        if pri_port is None:
+            await client.close()
+            return
+        client.feed_data(buffer)
+        _start_forward(
+            client,
+            pri_port,
+            sni.sni
+        )
+    except:
+        ...
 
 async def _forward_data(
     from_conn: Client,
