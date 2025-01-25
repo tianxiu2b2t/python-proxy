@@ -300,7 +300,7 @@ async def process_http1(client: Client, sni: Optional[str] = None):
     })
     client.feed_data(buffer)
     config = HTTPConfig()
-    config.host = sni or headers.get("Host", "")
+    config.host = urlparse.urlparse(f'http://{sni or headers.get("Host", "localhost")}').hostname or ""
     if config.host not in proxy_url:
         return
     proxy = proxy_url[config.host]

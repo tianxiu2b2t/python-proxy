@@ -106,5 +106,5 @@ class CFG:
 
     
 env = Env()
-config = CFG(f"{ROOT}/config/config.yml")
+config = CFG(f"{ROOT}/config.yml")
 __all__ = ['env', 'config']
