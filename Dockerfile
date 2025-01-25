@@ -1,6 +1,6 @@
 FROM python:3.12
 
-WORKDIR /opt/applicatiion
+WORKDIR /opt/application
 ADD . .
 
 RUN pip install -r requirements.txt
