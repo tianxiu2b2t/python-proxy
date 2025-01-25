@@ -21,10 +21,10 @@ proxy_url: dict[str, 'Proxy'] = {}
 class Proxy:
     def __init__(
         self,
-        url: urlparse.ParseResult,
+        url: str,
         forward_ip_headers: list[str] = []
     ):
-        self.url = url
+        self.url = urlparse.urlparse(url)
         self.forward_ip_headers = forward_ip_headers
 
 
