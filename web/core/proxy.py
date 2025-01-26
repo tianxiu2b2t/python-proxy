@@ -86,6 +86,12 @@ async def _forward_req(
         status.req_raw_path = path
         status.req_user_agent = headers.get("User-Agent", "")
         status.req_host = headers.get("Host", "")
+
+        # add proxy header
+        headers["X-Forwarded-For"] = status.req_peername
+        headers["X-Forwarded-Proto"] = "https"
+        headers["X-Forwarded-Host"] = status.req_host
+        headers["X-Real-IP"] = status.req_peername
         
         # start forward
         statistics.add_qps("proxy:" + status.proxy_url)
