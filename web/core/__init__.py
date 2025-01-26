@@ -1,11 +1,10 @@
 import asyncio
-from typing import Any, Callable, Optional
+from typing import Optional
 
 from logger import logger
-from . import http2_parser
 from .app import Application, Request, process_application
 from .proxy import ProxyForward, process_backend_proxy
-from ..utils import Client, ClientStream, ForwardConfig, Header
+from ..utils import Client, ForwardConfig, Header
 from ..protocols import is_http1, is_http2, Protocol
 
 import urllib.parse as urlparse

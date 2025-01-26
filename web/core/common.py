@@ -6,6 +6,7 @@ from typing import Any
 from bson import ObjectId
 import config
 from logger import logger
+import scheduler
 import units
 import database
 from utils import Queue
@@ -86,6 +87,22 @@ class Statistics:
                 http_version=http_version
             )
         )
+
+    def gc(self):
+        self.gc_total_queries()
+        self.gc_queries()
+
+    def gc_total_queries(self):
+        old_keys = list(filter(lambda x: x < self.get_runtime_int - 600, list(self.total_queries.keys())))
+        for key in old_keys:
+            del self.total_queries[key]
+
+    def gc_queries(self):
+        for host, host_dict in self.queries.items():
+            old_keys = list(filter(lambda x: x < self.get_runtime_int - 600, list(host_dict.keys())))
+            for key in old_keys:
+                del host_dict[key]
+                
 
     async def _task_print_access_log(self):
         while not self._stop:
@@ -184,6 +201,7 @@ class Statistics:
     def start(self):
         self._logger_task = asyncio.get_running_loop().create_task(self._task_print_access_log())
         self._db_logger_task = asyncio.get_running_loop().create_task(self._task_save_access_log())
+        scheduler.run_repeat_later(self.gc, 5, 60)
 
     async def stop(self):
         self._stop = True
