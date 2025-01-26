@@ -1,5 +1,6 @@
 
 
+import enum
 import io
 from typing import Optional
 
@@ -58,5 +59,22 @@ def get_client_handshake_info(data: bytes):
             extensions.append((extension_type, extension_data))
             current_extension_cur += extension_length + 4
     except:
-        ...
+        info.version = -1
     return info
+
+
+def is_http1(data: bytes):
+    if b"\r\n" not in data:
+        return False
+    data = data.split(b"\r\n", 1)[0]
+    if data.count(b" ") < 2:
+        return False
+    return data.split(b" ", 2)[2].startswith(b"HTTP/1.")
+
+def is_http2(data: bytes):
+    return data.startswith(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+
+
+class Protocol(enum.Enum):
+    HTTP1 = 1
+    HTTP2 = 2

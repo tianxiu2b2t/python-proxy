@@ -1,9 +1,11 @@
 import asyncio
 from typing import Any
 from logger import logger
-import proxy
 import scheduler
-import service
+import database
+import dashboard
+import web
+import proxy
 
 def init():
     asyncio.run(main())
@@ -22,8 +24,10 @@ async def main():
     # load modules
     for module in (
         scheduler,
-        proxy,
-        service
+        database,
+        web,
+        dashboard,
+        proxy
     ):
         await run_func(module, "init")
 
@@ -34,7 +38,7 @@ async def main():
 
     # unload modules
     for module in (
+        web,
         scheduler,
-        proxy,
     ):
         await run_func(module, "unload")

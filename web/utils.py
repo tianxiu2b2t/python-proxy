@@ -1,0 +1,316 @@
+import asyncio
+from collections import defaultdict, deque
+from dataclasses import dataclass
+import ssl
+from typing import Any, Optional
+
+forwards: dict[tuple[str, int], tuple[str, int]] = {}
+forwards_count: defaultdict[tuple[str, int], int] = defaultdict(int)
+forwards_config: dict[tuple[str, int], Any] = {}
+
+class Client:
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        peername: Optional[tuple[str, int]] = None
+    ):
+        self._reader = reader
+        self._writer = writer
+        self._peername = peername
+        self._buffers: deque[bytes] = deque()
+        self._closed = False
+
+    def __repr__(self):
+        return f'<Client {self.peername!r} {self.sockname!r}>'
+
+    @property
+    def peername(self) -> tuple[str, int]:
+        return self._peername or self._writer.get_extra_info('peername')
+    
+    @property
+    def sockname(self) -> tuple[str, int]:
+        return self._writer.get_extra_info('sockname')
+    
+    def feed_reader_data(self, data: bytes):
+        self._buffers.appendleft(data)
+
+    async def read(self, n: int) -> bytes:
+        if self._buffers:
+            data = self._buffers.pop()
+            ret, body = data[:n], data[n:]
+            if body:
+                self._buffers.appendleft(body)
+            return ret
+        return await self._reader.read(n)
+    
+    async def readuntil(self, separator: bytes) -> bytes:
+        ret = b''
+        if self._buffers:
+            data = b''.join(self._buffers)
+            self._buffers.clear()
+            if separator in data:
+                ret, body = data.split(separator, maxsplit=1)
+                if body:
+                    self._buffers.appendleft(body)
+                ret += separator
+                return ret
+            ret = data
+        return ret + await self._reader.readuntil(separator)
+
+    
+    def write(self, data: bytes):
+        self._writer.write(data)
+
+    async def drain(self):
+        await self._writer.drain()
+
+    async def close(self, timeout: int = 10):
+        if self._closed:
+            return
+        self._closed = True
+        self._writer.close()
+        try:
+            await asyncio.wait_for(self._writer.wait_closed(), timeout)
+        except (asyncio.CancelledError, TimeoutError, ssl.SSLError):
+            pass
+
+    @property
+    def is_closing(self):
+        return self._writer.is_closing() or self._closed
+    
+class ForwardAddress:
+    def __init__(
+        self,
+        origin: tuple[str, int],
+        target: tuple[str, int],
+        cfg: 'ForwardConfig'
+    ):
+        self.origin = origin
+        self.target = target
+        self.cfg = cfg
+
+    def __enter__(self):
+        forwards[self.target] = self.origin
+        forwards_count[self.target] += 1
+        forwards_config[self.origin] = self.cfg
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        forwards_count[self.target] -= 1
+        if forwards_count[self.target] == 0 and self.target in forwards:
+            origin = forwards[self.target]
+            del forwards_config[origin]
+            del forwards[self.target]
+            del forwards_count[self.target]
+    
+class ForwardConfig:
+    def __init__(
+        self,
+        sni: Optional[str] = None,
+        pub_port: Optional[int] = None
+    ):
+        self.sni = sni
+        self.pub_port = pub_port
+
+    def __repr__(self):
+        return f'<ForwardConfig sni={self.sni!r} pub_port={self.pub_port!r}>'
+
+class Header(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _get_key(self, key: str):
+        for k in self:
+            if k.lower() == key.lower():
+                return k
+        return key
+
+    def __getitem__(self, key: str):
+        return super().__getitem__(self._get_key(key))
+
+    def __setitem__(self, key: str, value):
+        super().__setitem__(self._get_key(key), value)
+
+    def __delitem__(self, key: str):
+        super().__delitem__(self._get_key(key))
+
+    def get(self, key: str, default=None):
+        return super().get(self._get_key(key), default)
+    
+    def setdefault(self, key: str, default=None):
+        return super().setdefault(self._get_key(key), default)
+
+@dataclass
+class Cookie:
+    name: str
+    value: str
+    domain: Optional[str] = None
+    path: Optional[str] = None
+    expires: Optional[str] = None
+    max_age: Optional[int] = None
+    secure: Optional[bool] = None
+    http_only: Optional[bool] = None
+    same_site: Optional[str] = None
+
+    def to_response_header(self):
+        return f'{self.name}={self.value};' + \
+            (f' domain={self.domain};' if self.domain else '') + \
+            (f' path={self.path};' if self.path else '') + \
+            (f' expires={self.expires};' if self.expires else '') + \
+            (f' max-age={self.max_age};' if self.max_age else '') + \
+            (f' secure;' if self.secure else '') + \
+            (f' httponly;' if self.http_only else '') + \
+            (f' samesite={self.same_site};' if self.same_site else '')
+
+
+STATUS_CODES: dict[int, str] = {
+    100: "Continue",
+    101: "Switching Protocols",
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    203: "Non-Authoritative Information",
+    204: "No Content",
+    205: "Reset Content",
+    206: "Partial Content",
+    300: "Multiple Choices",
+    301: "Moved Permanently",
+    302: "Found",
+    303: "See Other",
+    304: "Not Modified",
+    305: "Use Proxy",
+    307: "Temporary Redirect",
+    400: "Bad Request",
+    401: "Unauthorized",
+    402: "Payment Required",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    406: "Not Acceptable",
+    407: "Proxy Authentication Required",
+    408: "Request Timeout",
+    409: "Conflict",
+    410: "Gone",
+    411: "Length Required",
+    412: "Precondition Failed",
+    413: "Payload Too Large",
+    414: "URI Too Long",
+    415: "Unsupported Media Type",
+    416: "Range Not Satisfiable",
+    417: "Expectation Failed",
+    418: "I'm a teapot",
+    421: "Misdirected Request",
+    426: "Upgrade Required",
+    428: "Precondition Required",
+    429: "Too Many Requests",
+    431: "Request Header Fields Too Large",
+    451: "Unavailable For Legal Reasons",
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+    505: "HTTP Version Not Supported",
+    511: "Network Authentication Required",
+}
+
+def find_origin(sockname: tuple[str, int]):
+    if sockname not in forwards:
+        return sockname
+    return find_origin(forwards[sockname])
+
+def get_origin_cfg(sockname: tuple[str, int]):
+    return forwards_config.get(sockname, None)
+
+def get_status_code_name(status_code: int):
+    return STATUS_CODES.get(status_code, "Unknown")
+    
+class ClientStream:
+    def __init__(
+        self,
+    ):
+        self._client = None
+        self._read_buffers: deque[bytes] = deque()
+        self._wait_read: deque[asyncio.Future] = deque()
+        self._write_buffers: deque[bytes] = deque()
+        self._wait_write: deque[asyncio.Future] = deque()
+
+    def set_client(self, client: Client):
+        self._client = client
+
+    def write(self, data: bytes):
+        if self._client is not None:
+            self._client.write(data)
+            return
+        self._write_buffers.append(data)
+    
+    async def read(self, n: int):
+        if len(self._read_buffers) == 0 and self._client is None:
+            fut = asyncio.Future()
+            self._wait_read.append(fut)
+            try:
+                await fut
+            finally:
+                self._wait_read.remove(fut)
+        if self._read_buffers:
+            buf = self._read_buffers.popleft()
+            ret, buf = buf[:n], buf[n:]
+            if buf:
+                self._read_buffers.appendleft(buf)
+            return ret
+        if self._client is not None:
+            return await self._client.read(n)
+        raise EOFError
+
+    async def readuntil(self, separator: bytes):
+        ret = b''
+        if self._read_buffers:
+            data = b''.join(self._read_buffers)
+            self._read_buffers.clear()
+            if separator in data:
+                ret, body = data.split(separator, maxsplit=1)
+                if body:
+                    self._read_buffers.appendleft(body)
+                ret += separator
+                return ret
+            ret = data
+        if self._client is None:
+            raise EOFError
+        return ret + await self._client.readuntil(separator)
+    
+    async def close(self):
+        if self._client is not None:
+            await self._client.close(5)
+            self._client = None
+        for fut in self._wait_read:
+            fut.set_result(True)
+        self._wait_read.clear()
+
+    def feed_read_data(self, data: bytes):
+        self._read_buffers.append(data)
+        while self._read_buffers and self._wait_read:
+            fut = self._wait_read.popleft()
+            fut.set_result(True)
+        
+    def feed_write_data(self, data: bytes):
+        self._write_buffers.append(data)
+        while self._write_buffers and self._wait_write:
+            fut = self._wait_write.popleft()
+            fut.set_result(True)
+
+    async def drain(self):
+        if self._client is not None:
+            await self._client.drain()
+        while self._write_buffers and self._wait_write:
+            fut = self._wait_write.popleft()
+            fut.set_result(True)
+
+    @property
+    def transport(self):
+        assert self._client is not None
+        return self._client._writer.transport
+    
+    @property
+    def is_closing(self):
+        return self._client is not None and self._client.is_closing

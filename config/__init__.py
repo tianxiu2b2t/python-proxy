@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import string
 from typing import Any
 import dotenv
 import yaml
@@ -84,6 +85,10 @@ class CFG:
         self._set_value(self.cfg, key.split("."), value)
         self.save()
 
+    def __contains__(self, key: str) -> bool:
+        value = os.environ.get(key, None) or self._get_value(self.cfg, key.split("."))
+        return value is not None
+
     def save(self):
         self.file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.file, "w", encoding="utf-8") as f:
@@ -104,7 +109,12 @@ class CFG:
             dict_obj = dict_obj[key]
         dict_obj[keys[-1]] = value
 
-    
+class Template:
+    ACCESS_LOG = string.Template(
+        "${type} - ${host} | ${rtt} | ${method} ${status} | ${http_version} ${address} | ${path} - ${user_agent}"
+    )
+
 env = Env()
+templates = Template()
 config = CFG(f"{ROOT}/config.yml")
-__all__ = ['env', 'config']
+__all__ = ['env', 'config', 'templates']

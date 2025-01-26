@@ -1,5 +1,2 @@
-from . import acme_zerossl
+from . import acme
 from . import dns
-
-async def init():
-    await acme_zerossl.init()
