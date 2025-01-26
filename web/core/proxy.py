@@ -116,6 +116,15 @@ async def _forward_req(
             content_length -= len(data)
             await conn.drain()
 
+        websocket = "Upgrade" in headers and headers["Upgrade"] == "websocket"
+        if not websocket:
+            continue
+        while not client.is_closing and (data := await client.read(MAX_BUFFER)):
+            if not data:
+                break
+            conn.write(data)
+            await conn.drain()
+
 
 async def _forward_resp(
     client: ClientStream,
@@ -179,6 +188,19 @@ async def _forward_resp(
                     break
                 client.write(data)
                 content_length -= len(data)
+
+        # if websocket
+        websocket = headers.get("Upgrade", None) == "websocket" and headers.get("Connection", None) == "Upgrade"
+        event_stream = headers.get("Content-Type", None) == "text/event-stream"
+        if not websocket and not event_stream:
+            continue
+        while not client.is_closing and not conn.is_closing:
+            data = await conn.read(MAX_BUFFER)
+            if not data:
+                break
+            client.write(data)
+            await client.drain()
+
             
 
 
