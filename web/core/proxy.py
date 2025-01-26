@@ -106,8 +106,7 @@ async def _forward_req(
         conn.write(req_header.encode("utf-8"))
 
         content_length = int(headers.get("Content-Length", None) or 0)
-        if content_length == 0:
-            continue
+        websocket = (headers.get("Upgrade") or "").lower() == "websocket"
 
         while content_length > 0 and not client.is_closing and (data := await client.read(min(content_length, MAX_BUFFER))):
             if not data:
@@ -116,7 +115,6 @@ async def _forward_req(
             content_length -= len(data)
             await conn.drain()
 
-        websocket = "Upgrade" in headers and headers["Upgrade"] == "websocket"
         if not websocket:
             continue
         while not client.is_closing and (data := await client.read(MAX_BUFFER)):
@@ -190,11 +188,13 @@ async def _forward_resp(
                 content_length -= len(data)
 
         # if websocket
-        websocket = headers.get("Upgrade", None) == "websocket" and headers.get("Connection", None) == "Upgrade"
-        event_stream = headers.get("Content-Type", None) == "text/event-stream"
+        websocket = (headers.get("Connection") or "").lower() == "upgrade" and (headers.get("Upgrade") or "").lower() == "websocket"
+        event_stream = "text/event-stream" in (headers.get("Content-Type", "")).lower()
+
         if not websocket and not event_stream:
             continue
-        while not client.is_closing and not conn.is_closing:
+
+        while not conn.is_closing:
             data = await conn.read(MAX_BUFFER)
             if not data:
                 break
