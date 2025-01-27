@@ -417,7 +417,7 @@ class Request:
     
     @property
     def user_agent(self):
-        return self.headers.get("User-Agent", "")
+        return self.headers.get_one("User-Agent") or ""
 
     @property
     def method(self) -> str:
@@ -425,7 +425,7 @@ class Request:
 
     @property
     def hostname(self):
-        return self.headers.get("Host", "")
+        return self.headers.get_one("Host", "") or ""
 
     @property
     def path(self) -> str:
@@ -438,9 +438,9 @@ class Request:
     @property
     def range(self):
         start_bytes, end_bytes = 0, None
-        if not self.headers.get('Range'):
+        if 'Range' not in self.headers:
             return start_bytes, end_bytes
-        range = self.headers.get('Range').split('=')[1]
+        range = (self.headers.get_one('Range') or "").split('=')[1]
         if '-' in range:
             start_bytes, end_bytes = map(lambda x: int(x) if x else None, range.split('-'))
         else:
@@ -458,7 +458,7 @@ class Request:
 
     @property
     def is_json(self):
-        return (self.headers.get("Content-Type") or "").startswith("application/json") and self.method in ("POST", "PUT", "PATCH") and self.headers.get("Content-Length") or 0 > 0
+        return (self.headers.get_one("Content-Type") or "").startswith("application/json") and self.method in ("POST", "PUT", "PATCH") and self.headers.get_one("Content-Length") or 0 > 0
 
     def _parse_path(self):
         if not hasattr(self, "_path") or not hasattr(self, "_query"):
@@ -545,7 +545,7 @@ class Response:
             if self.content_type is None or ("text/" not in self.content_type and "application/json" not in self.content_type):
                 extra_headers['Content-Disposition'] = f'attachment; filename="{content.name}"'
             etag = get_etag(content)
-            if request.headers.get("If-None-Match", "") == etag and self.status == 200:
+            if request.headers.get_one("If-None-Match", "") == etag and self.status == 200:
                 self.status = 304
                 content = memoryview(b'')
             extra_headers["ETag"] = etag
@@ -570,7 +570,7 @@ class Response:
                 headers["Accept-Ranges"] = "bytes"
                 length = end_bytes - start_bytes + 1
             else:
-                headers["Content-Length"] = length
+                headers["Content-Length"] = str(length)
             if isinstance(content, memoryview):
                 #compression = compress(content.tobytes(), request.accept_encoding)
                 #if compression.compressed:

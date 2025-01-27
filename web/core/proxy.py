@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass
 import ssl
 import time
+from typing import Optional
 
 from logger import logger
 from .common import statistics
@@ -61,6 +62,8 @@ class HTTPStatus:
 
     proxy_url: str = ""
 
+    keepalive: Optional[asyncio.Future] = None
+
 
 async def _forward_req(
     client: ClientStream,
@@ -76,37 +79,46 @@ async def _forward_req(
             byte_path.decode("utf-8"),
             byte_version.decode("utf-8"),
         )
-        headers = Header({
-            k: v for k, v in (
-                line.decode("utf-8").split(": ", 1) for line in byte_header.split(b"\r\n")
-            )
-        })
+        headers = Header()
+        for line in byte_header.split(b"\r\n"):
+            if not line:
+                break
+            k, v = line.split(b": ", 1)
+            headers.add(k.decode("utf-8"), v.decode("utf-8"))
+
         status.req_http_version = http_version
         status.req_method = method
         status.req_raw_path = path
-        status.req_user_agent = headers.get("User-Agent", "")
-        status.req_host = headers.get("Host", "")
+        status.req_user_agent = (headers.get_one("User-Agent") or "")
+        status.req_host = (headers.get_one("Host") or "")
 
         # add proxy header
-        headers["X-Forwarded-For"] = status.req_peername
-        headers["X-Forwarded-Proto"] = "https"
-        headers["X-Forwarded-Host"] = status.req_host
-        headers["X-Real-IP"] = status.req_peername
+        #headers["X-Forwarded-For"] = status.req_peername
+        #headers["X-Forwarded-Proto"] = "https"
+        #headers["X-Forwarded-Host"] = status.req_host
+        #headers["X-Real-IP"] = status.req_peername
         
         # start forward
         statistics.add_qps("proxy:" + status.proxy_url)
 
         req_header = f"{method} {path} HTTP/1.1\r\n"
         for k, v in headers.items():
+            if isinstance(v, list):
+                for val in v:
+                    req_header += f"{k}: {val}\r\n"
+                continue
             req_header += f"{k}: {v}\r\n"
         req_header += "\r\n"
 
         status.req_time = time.perf_counter_ns()
 
+        if status.keepalive is not None:
+            status.keepalive.cancel()
+
         conn.write(req_header.encode("utf-8"))
 
-        content_length = int(headers.get("Content-Length", None) or 0)
-        websocket = (headers.get("Upgrade") or "").lower() == "websocket"
+        content_length = int(headers.get_one("Content-Length", None) or 0)
+        websocket = (headers.get_one("Upgrade") or "").lower() == "websocket"
 
         while content_length > 0 and not client.is_closing and (data := await client.read(min(content_length, MAX_BUFFER))):
             if not data:
@@ -155,23 +167,29 @@ async def _forward_resp(
         )
 
 
-        headers = Header({
-            k: v for k, v in (
-                line.decode("utf-8").split(": ", 1) for line in byte_header.split(b"\r\n")
-            )
-        })
+        headers = Header()
+        for line in byte_header.split(b"\r\n"):
+            if not line:
+                break
+            k, v = line.split(b": ", 1)
+            headers.add(k.decode("utf-8"), v.decode("utf-8"))
+
         status.accepted = True
 
         # start forward
 
         resp_header = f"{status.req_http_version} {status_code} {status_name}\r\n"
         for k, v in headers.items():
+            if isinstance(v, list):
+                for val in v:
+                    resp_header += f"{k}: {val}\r\n"
+                continue
             resp_header += f"{k}: {v}\r\n"
         resp_header += "\r\n"
         client.write(resp_header.encode("utf-8"))
 
         transfer = "Transfer-Encoding" in headers and headers["Transfer-Encoding"] == "chunked"
-        content_length = int(headers.get("Content-Length", None) or 0)
+        content_length = int(headers.get_one("Content-Length", None) or 0)
         if transfer:
             while not conn.is_closing and (data := await conn.readuntil(b"\r\n")):
                 size = int(data[:-2], 16)
@@ -188,19 +206,24 @@ async def _forward_resp(
                 content_length -= len(data)
 
         # if websocket
-        websocket = (headers.get("Connection") or "").lower() == "upgrade" and (headers.get("Upgrade") or "").lower() == "websocket"
-        event_stream = "text/event-stream" in (headers.get("Content-Type", "")).lower()
+        websocket = (headers.get_one("Connection") or "").lower() == "upgrade" and (headers.get_one("Upgrade") or "").lower() == "websocket"
+        event_stream = "text/event-stream" in (headers.get_one("Content-Type") or "").lower()
 
-        if not websocket and not event_stream:
-            continue
-
-        while not conn.is_closing:
-            data = await conn.read(MAX_BUFFER)
-            if not data:
-                break
-            client.write(data)
-            await client.drain()
-
+        if websocket or event_stream:
+            while not conn.is_closing:
+                data = await conn.read(MAX_BUFFER)
+                if not data:
+                    break
+                client.write(data)
+                await client.drain()
+        
+        if "Keep-Alive" in headers and "timeout=" in headers["Keep-Alive"]:
+            status.keepalive = asyncio.Future()
+            try:
+                await asyncio.wait_for(status.keepalive, int((headers.get_one("Keep-Alive") or "").split("timeout=")[1]))
+            except asyncio.exceptions.TimeoutError:
+                await conn.close()
+                return
             
 
 

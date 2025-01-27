@@ -103,7 +103,6 @@ class Statistics:
             for key in old_keys:
                 del host_dict[key]
                 
-
     async def _task_print_access_log(self):
         while not self._stop:
             obj = await self._logger_queue.poll()
@@ -198,6 +197,7 @@ class Statistics:
                     )
                     for obj in objs
                 ])
+    
     def start(self):
         self._logger_task = asyncio.get_running_loop().create_task(self._task_print_access_log())
         self._db_logger_task = asyncio.get_running_loop().create_task(self._task_save_access_log())

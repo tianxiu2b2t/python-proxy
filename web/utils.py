@@ -2,7 +2,7 @@ import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import ssl
-from typing import Any, Optional
+from typing import Any, Optional, MutableMapping
 
 forwards: dict[tuple[str, int], tuple[str, int]] = {}
 forwards_count: defaultdict[tuple[str, int], int] = defaultdict(int)
@@ -116,9 +116,18 @@ class ForwardConfig:
     def __repr__(self):
         return f'<ForwardConfig sni={self.sni!r} pub_port={self.pub_port!r}>'
 
-class Header(dict):
+class Header(dict[str, list[str]]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # convert
+        headers: defaultdict[str, list[str]] = defaultdict(list)
+        for k, v in self.items():
+            if not isinstance(v, list):
+                v = [v]
+            headers[k.lower()].extend(v)
+        self.clear()
+        for k, v in headers.items():
+            self[k] = v
 
     def _get_key(self, key: str):
         for k in self:
@@ -129,17 +138,48 @@ class Header(dict):
     def __getitem__(self, key: str):
         return super().__getitem__(self._get_key(key))
 
-    def __setitem__(self, key: str, value):
+    def __setitem__(self, key: str, value: list[str] | str):
+        if not isinstance(value, list):
+            value = [value]
         super().__setitem__(self._get_key(key), value)
 
     def __delitem__(self, key: str):
         super().__delitem__(self._get_key(key))
 
     def get(self, key: str, default=None):
-        return super().get(self._get_key(key), default)
+        return super().get(self._get_key(key), default or [])
+    
+    def get_one(self, key: str, default=None):
+        ret = self.get(key, default)
+        if not ret:
+            return default
+        return ret[0]
     
     def setdefault(self, key: str, default=None):
-        return super().setdefault(self._get_key(key), default)
+        return super().setdefault(self._get_key(key), default or [])
+
+    def add(self, key: str, value: str):
+        key = self._get_key(key)
+        if key in self:
+            self[key].append(value)
+        else:
+            self[key] = [value]
+
+    def update(self, data: dict[str, list[str]] | dict[str, str]):
+        for k, v in data.items():
+            if not isinstance(v, list):
+                v = [v]
+            for val in v:
+                self.add(k, val)
+
+    def set(self, key: str, value: str | list[str]):
+        if not isinstance(value, list):
+            value = [value]
+        self[key] = value
+
+    def copy(self):
+        return Header(self)
+
 
 @dataclass
 class Cookie:

@@ -8,8 +8,8 @@ redis = aredis.Redis(
     port=int(config.env.get("REDIS_PORT") or 6379)
 )
 
-prefix = "proxy"
-redis_prefix = "proxy:"
+prefix = config.env.get("DB") or "proxy"
+redis_prefix = f"{prefix}:"
 
 async def init():
     global pool

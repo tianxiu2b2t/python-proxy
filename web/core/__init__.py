@@ -48,7 +48,7 @@ async def process(
                     line.decode("utf-8").split(": ", 1) for line in buffer.split(b"\r\n\r\n", 1)[0].split(b"\r\n", 1)[1].split(b"\r\n")
                 )
             })
-            host = header.get("Host") or ""
+            host = header.get_one("Host") or ""
         if host is None:
             return
 
