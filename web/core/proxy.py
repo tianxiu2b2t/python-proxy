@@ -93,10 +93,10 @@ async def _forward_req(
         status.req_host = (headers.get_one("Host") or "")
 
         # add proxy header
-        #headers["X-Forwarded-For"] = status.req_peername
-        #headers["X-Forwarded-Proto"] = "https"
-        #headers["X-Forwarded-Host"] = status.req_host
-        #headers["X-Real-IP"] = status.req_peername
+        headers["X-Forwarded-For"] = status.req_peername
+        headers["X-Forwarded-Proto"] = "https"
+        headers["X-Forwarded-Host"] = status.req_host
+        headers["X-Real-IP"] = status.req_peername
         
         # start forward
         statistics.add_qps("proxy:" + status.proxy_url)
