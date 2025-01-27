@@ -188,7 +188,7 @@ async def _forward_resp(
         resp_header += "\r\n"
         client.write(resp_header.encode("utf-8"))
 
-        transfer = "Transfer-Encoding" in headers and headers["Transfer-Encoding"] == "chunked"
+        transfer = "Transfer-Encoding" in headers and (headers.get_one("Transfer-Encoding") or "").lower() == "chunked"
         content_length = int(headers.get_one("Content-Length", None) or 0)
         if transfer:
             while not conn.is_closing and (data := await conn.readuntil(b"\r\n")):
