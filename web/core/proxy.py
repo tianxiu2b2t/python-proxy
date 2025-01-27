@@ -286,7 +286,7 @@ async def process_http1_backend_proxy(
             HTTPResponse(
                 301,
                 Header({
-                    "Location": f"https://{hostname}{path}"
+                    "Location": f"https://{status.req_host}{path}"
                 })
             )
         )
