@@ -239,7 +239,13 @@ async def forward_http1(
         ))
     except (
         asyncio.exceptions.IncompleteReadError,
-        asyncio.exceptions.LimitOverrunError
+        asyncio.exceptions.LimitOverrunError,
+        ConnectionAbortedError,
+        ConnectionResetError,
+        TimeoutError,
+        asyncio.exceptions.CancelledError,
+        ConnectionRefusedError,
+        ConnectionError
     ):
         ...
     except:
