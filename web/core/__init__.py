@@ -16,19 +16,26 @@ port_applications: dict[int, 'Application'] = {}
 
 def create_proxy(
     host: str,
-    url: str
+    url: str,
+    force_https: bool = False
 ):
     if host in proxies:
         raise ValueError(f"proxy {host} already exists")
-    proxies[host] = ProxyForward(url)
+    proxies[host] = ProxyForward(
+        url,
+        force_https
+    )
 
 def create_application(
     host: str,
-    port: Optional[int] = None 
+    port: Optional[int] = None,
+    force_https: bool = False
 ):
     if host in applications:
         return applications[host]
-    applications[host] = Application()
+    applications[host] = Application(
+        force_https
+    )
     if host == "*":
         assert port is not None
         port_applications[port] = applications[host]
@@ -65,11 +72,10 @@ async def process(
 
         if cfg.pub_port in port_applications:
             await process_application(client, protocol, hostname, port_applications[cfg.pub_port])
-
-        if hostname in proxies:
-            await process_backend_proxy(client, protocol, hostname, proxies[hostname])
         elif hostname in applications:
             await process_application(client, protocol, hostname, applications[hostname])
+        elif hostname in proxies:
+            await process_backend_proxy(client, protocol, hostname, proxies[hostname])
         else:
             logger.debug("Unavailable host:", hostname)
     except (

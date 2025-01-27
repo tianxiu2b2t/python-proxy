@@ -1,13 +1,14 @@
+from pathlib import Path
 import web
+
+ASSETS = Path(__file__).parent / "assets"
 
 app = web.create_application(
     "*",
     8008
 )
 
-@app.get("/")
-async def index():
-    return web.statistics.queries
+app.mount("/", ASSETS / "index.html")
 
 async def init():
     """Initialize the dashboard."""

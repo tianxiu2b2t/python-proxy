@@ -16,7 +16,8 @@ MAX_BUFFER = 1024 * 1024 * 4
 class ProxyForward:
     def __init__(
         self,
-        url: str
+        url: str,
+        force_https: bool = False
     ):
         result = urlparse.urlparse(url)
         self.url = url
@@ -25,6 +26,7 @@ class ProxyForward:
             443 if result.scheme == "https" else 80
         )
         self.scheme = result.scheme
+        self.force_https = force_https
 
     @property
     def is_ssl(self):
@@ -225,8 +227,6 @@ async def _forward_resp(
                 await conn.close()
                 return
             
-
-
 async def forward_http1(
     client: ClientStream,
     conn: Client,
@@ -258,21 +258,73 @@ async def process_http1_backend_proxy(
     proxy: ProxyForward
 ):
     status = HTTPStatus()
-    stream = ClientStream()
-    stream.set_client(client)
+    stream = ClientStream(client)
     status.req_peername = client.peername[0]
     status.proxy_url = proxy.url
+
+    if proxy.force_https and not client.is_tls:
+        status.req_time = time.perf_counter_ns()
+        buffer = await client.readuntil(b"\r\n\r\n")
+        buffer = buffer[:-4]
+        pre_byte_header, byte_headers = buffer.split(b"\r\n", 1)
+        method, path, http_version = pre_byte_header.decode("utf-8").split(" ")
+        headers = Header()
+        for line in byte_headers.decode("utf-8").split("\r\n"):
+            k, v = line.split(": ", 1)
+            headers.add(k, v)
+
+        status.req_http_version = http_version
+        status.req_method = method
+        status.req_raw_path = path
+        status.req_user_agent = (headers.get_one("User-Agent") or "")
+        status.req_host = (headers.get_one("Host") or "")
+
+
+        await send_response(
+            client,
+            status,
+            HTTPResponse(
+                301,
+                Header({
+                    "Location": f"https://{hostname}{path}"
+                })
+            )
+        )
+        return
+
+
     try:
         context = None
         if proxy.is_ssl:
             context = ssl._create_default_https_context()
         conn = Client(*await asyncio.wait_for(asyncio.open_connection(proxy.host, proxy.port, ssl=context), 5))
+    
+
         await forward_http1(stream, conn, status)
     except Exception as e:
         logger.traceback()
         if not status.accepted:
-            statistics.add_qps("proxy:" + proxy.url)
-            client.write(CONNECT_TIMEOUT_RESPONSE.to_bytes())
+            await send_response(client, status, BAD_GATEWAY_RESPONSE)
+
+async def send_response(
+    client: Client,
+    status: HTTPStatus,
+    response: 'HTTPResponse'
+):
+    statistics.add_qps("proxy-gateway:" + status.proxy_url)
+    status.resp_time = time.perf_counter_ns()
+    statistics.print_access_log(
+        "Proxy-Gateway",
+        status.req_host,
+        status.resp_time - status.req_time,
+        status.req_method,
+        status.req_raw_path,
+        response.status_code,
+        status.req_peername,
+        status.req_user_agent,
+        status.req_http_version
+    )
+    client.write(response.to_bytes())
 
 
 class HTTPResponse:
@@ -294,10 +346,14 @@ class HTTPResponse:
         self.headers["Content-Length"] = str(len(content))
         byte_header = f"HTTP/1.1 {self.status_code} {get_status_code_name(self.status_code)}\r\n"
         for k, v in self.headers.items():
+            if isinstance(v, list):
+                for val in v:
+                    byte_header += f"{k}: {val}\r\n"
+                continue
             byte_header += f"{k}: {v}\r\n"
         byte_header += "\r\n"
         return byte_header.encode("utf-8") + content
-    
+
 
 CONNECT_TIMEOUT_RESPONSE = HTTPResponse(
     status_code=504,

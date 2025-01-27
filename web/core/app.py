@@ -12,7 +12,9 @@ from typing import Any, AsyncGenerator, AsyncIterable, AsyncIterator, Callable, 
 import urllib.parse as urlparse
 import uuid
 
-import filetype
+from .compresstor import compress
+
+from . import filetype
 from bson import ObjectId
 
 from logger import logger
@@ -295,12 +297,16 @@ class RequestTiming:
 
 
 class Application:
-    def __init__(self):
+    def __init__(
+        self,
+        force_https: bool = False
+    ):
         self._routers: deque['Router'] = deque(
             [
                 Router()
             ]
         )
+        self._force_https = force_https
 
     def get(self, path: str):
         return self._routers[0].get(path)
@@ -326,6 +332,9 @@ class Application:
     def trace(self, path: str):
         return self._routers[0].trace(path)
     
+    def mount(self, path: str, root: Path):
+        return self._routers[0].mount(path, root)
+
     def add_router(self, router: Router):
         self._routers.append(router)
         return router
@@ -343,6 +352,9 @@ class Application:
         request: 'Request'
     ) -> Any:
         statistics.add_qps("application:" + repr(self))
+        if self._force_https and not request.client.is_tls:
+            await LocationResponse("https://" + request.hostname + request.raw_path)(request)
+            return
         with RequestTiming(request) as timing:
             route = self.get_route(request)
             result = inspect._empty
@@ -374,8 +386,32 @@ class Application:
         func = route_result.route.parameters
         handle = func.handler
         params = {}
+        url_params = route_result.match.groupdict()
+        json_params = None
         for arg in func.route_handler_args:
-            print(arg)
+            if Request in arg.type_annotation:
+                params[arg.name] = request
+            elif Application in arg.type_annotation:
+                params[arg.name] = self
+            else:
+                # first url param
+                if arg.name in url_params:
+                    params[arg.name] = url_params[arg.name]
+                elif arg.name in request.query:
+                    params[arg.name] = request.query[arg.name]
+                    if len(params[arg.name]) == 1:
+                        params[arg.name] = params[arg.name][0]
+                elif request.is_json:
+                    if json_params is None:
+                        json_params = await request.json()
+                    if arg.name in json_params:
+                        params[arg.name] = json_params[arg.name]
+
+                elif request.is_www_form:
+                    if json_params is None:
+                        json_params = await request.json()
+                    if arg.name in json_params:
+                        params[arg.name] = json_params[arg.name]
         res = inspect._empty
         if inspect.iscoroutinefunction(handle):
             res = await handle(**params)
@@ -411,6 +447,10 @@ class Request:
     def address(self) -> str:
         return self._address
     
+    @property
+    def accept_encoding(self):
+        return self.headers.get_one("Accept-Encoding") or ""
+
     @property
     def raw_path(self):
         return self._raw_path
@@ -460,6 +500,18 @@ class Request:
     def is_json(self):
         return (self.headers.get_one("Content-Type") or "").startswith("application/json") and self.method in ("POST", "PUT", "PATCH") and self.headers.get_one("Content-Length") or 0 > 0
 
+    @property
+    def is_www_form(self):
+        return (self.headers.get_one("Content-Type") or "").startswith("application/x-www-form-urlencoded") and self.method in ("POST", "PUT", "PATCH") and self.headers.get_one("Content-Length") or 0 > 0
+    
+    async def read(self):
+        content_length = int(self.headers.get_one("Content-Length") or 0)
+        return await self._client.read(content_length)
+
+    async def json(self):
+        body = await self.read()
+        return json.loads(body)
+
     def _parse_path(self):
         if not hasattr(self, "_path") or not hasattr(self, "_query"):
             parsed = urlparse.urlparse(self._raw_path)
@@ -479,7 +531,7 @@ class Response:
         status: int = 200,
     ):
         self.content: CONTENT_TYPES = content
-        self.content_type = content_type or "text/plain"
+        self.content_type = content_type
         self.cookies = cookies or []
         self.headers = headers or Header({})
         self.status = status
@@ -572,13 +624,14 @@ class Response:
             else:
                 headers["Content-Length"] = str(length)
             if isinstance(content, memoryview):
-                #compression = compress(content.tobytes(), request.accept_encoding)
-                #if compression.compressed:
-                #    headers["Content-Encoding"] = compression.compression
-                #    headers["Content-Length"] = compression.length
-                #    content = memoryview(compression.data)
+                compression = compress(content.tobytes(), request.accept_encoding)
+                if compression.compressed:
+                    headers["Content-Encoding"] = compression.compression
+                    headers["Content-Length"] = str(compression.length)
+                    content = memoryview(compression.data)
                 content = memoryview(content.tobytes())[start_bytes:start_bytes + length]
-            headers["Content-Type"] = self.content_type
+            if self.content_type is not None:
+                headers["Content-Type"] = self.content_type
         else:
             headers["Transfer-Encoding"] = "chunked"
     
@@ -586,6 +639,10 @@ class Response:
         self.add_content_type_encoding(headers)
         for k, v in headers.items():
             if v is None:
+                continue
+            if isinstance(v, list):
+                for val in v:
+                    byte_header += f'{k}: {val}\r\n'
                 continue
             byte_header += f'{k}: {v}\r\n'
         byte_header += '\r\n'
@@ -625,6 +682,12 @@ class Response:
             return
         if 'text/' in content_type or 'application/json' in content_type:
             headers['Content-Type'] += '; charset=utf-8'
+
+
+class LocationResponse(Response):
+    def __init__(self, location: str, status: int = 302, headers: Optional['Header'] = None, cookies: list['Cookie'] = []):
+        super().__init__(status=status, headers=headers, cookies=cookies)
+        self.headers['Location'] = location
 
 
 class HTTPResponseJSONEncoder(json.JSONEncoder):

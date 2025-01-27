@@ -7,6 +7,7 @@ from service import acme, dns
 from .protocols import get_client_handshake_info
 from .utils import Client, ForwardAddress, ForwardConfig, find_origin, get_origin_cfg
 from .core import process, create_application, create_proxy
+from .core.app import Request, Response
 from .core.common import statistics
 
 pub_servers: dict[int, asyncio.Server] = {}
@@ -98,6 +99,7 @@ async def _pub_handle(
                 ForwardConfig(
                     sni=host,
                     pub_port=client.sockname[1],
+                    tls=True
                 )
             ):
                 await forward(

@@ -14,7 +14,7 @@ class Client:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         *,
-        peername: Optional[tuple[str, int]] = None
+        peername: Optional[tuple[str, int]] = None,
     ):
         self._reader = reader
         self._writer = writer
@@ -80,6 +80,10 @@ class Client:
     def is_closing(self):
         return self._writer.is_closing() or self._closed
     
+    @property
+    def is_tls(self):
+        return self._writer.get_extra_info('ssl_object') is not None
+    
 class ForwardAddress:
     def __init__(
         self,
@@ -108,10 +112,12 @@ class ForwardConfig:
     def __init__(
         self,
         sni: Optional[str] = None,
-        pub_port: Optional[int] = None
+        pub_port: Optional[int] = None,
+        tls: bool = False,
     ):
         self.sni = sni
         self.pub_port = pub_port
+        self.tls = tls
 
     def __repr__(self):
         return f'<ForwardConfig sni={self.sni!r} pub_port={self.pub_port!r}>'
@@ -138,7 +144,10 @@ class Header(dict[str, list[str]]):
     def __getitem__(self, key: str):
         return super().__getitem__(self._get_key(key))
 
-    def __setitem__(self, key: str, value: list[str] | str):
+    def __setitem__(self, key: str, value: list[str] | str | None):
+        if value is None:
+            self.__delitem__(key)
+            return
         if not isinstance(value, list):
             value = [value]
         super().__setitem__(self._get_key(key), value)
@@ -269,12 +278,15 @@ def get_status_code_name(status_code: int):
 class ClientStream:
     def __init__(
         self,
+        client: Optional[Client] = None,
+        tls: bool = False
     ):
-        self._client = None
+        self._client = client
         self._read_buffers: deque[bytes] = deque()
         self._wait_read: deque[asyncio.Future] = deque()
         self._write_buffers: deque[bytes] = deque()
         self._wait_write: deque[asyncio.Future] = deque()
+        self._tls = tls
 
     def set_client(self, client: Client):
         self._client = client
@@ -354,3 +366,7 @@ class ClientStream:
     @property
     def is_closing(self):
         return self._client is not None and self._client.is_closing
+    
+    @property
+    def is_tls(self):
+        return self._tls

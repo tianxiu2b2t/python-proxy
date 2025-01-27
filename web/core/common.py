@@ -60,8 +60,6 @@ class Statistics:
         self.total_queries[self.get_runtime_int] += 1
         self.queries[host][self.get_runtime_int] += 1
 
-
-
     def print_access_log(
         self,
         type: str,
