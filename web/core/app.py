@@ -369,9 +369,8 @@ class Application:
                     )
             if not isinstance(result, Response):
                 result = Response(result)
-            await timing.set_result(result)
         try:
-            await result(request)
+            await result(request, timing)
         except:
             logger.traceback()
 
@@ -586,7 +585,7 @@ class Response:
             return await self.get_content()
         return self.content
     
-    async def __call__(self, request: 'Request'):
+    async def __call__(self, request: 'Request', timing: Optional[RequestTiming] = None):
         content = await self.get_content()
         # if content instanceof Any, warning
         extra_headers = Header({})
@@ -649,6 +648,9 @@ class Response:
         # cookie
         if self.cookies:
             byte_header += '\r\n'.join([cookie.to_response_header() for cookie in self.cookies]) + '\r\n'
+        if timing is not None:
+            await timing.set_result(self)
+
         request.client.write(byte_header.encode('utf-8'))
         if request.method == 'HEAD':
             return self

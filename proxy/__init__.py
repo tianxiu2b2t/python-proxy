@@ -1,4 +1,6 @@
+import asyncio
 from dataclasses import dataclass
+import datetime
 from pathlib import Path
 from typing import Optional
 import config
@@ -87,13 +89,14 @@ class ProxyConfig:
                     
 cfg = ProxyConfig()
 acme_instances: dict[str, ACMEBase] = {}
+certs: list[ACMECertificate] = []
 
 async def init():
     cfg.load_dns_provider()
     proxies = cfg.load_backend_proxies()
     for proxy in proxies:
         await start_proxy(proxy)
-
+                
 
 async def start_proxy(
     proxy: ProxyConfigBackendProxy

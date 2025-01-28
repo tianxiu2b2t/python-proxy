@@ -194,19 +194,25 @@ async def _forward_resp(
         content_length = int(headers.get_one("Content-Length", None) or 0)
         if transfer:
             while not conn.is_closing and (data := await conn.readuntil(b"\r\n")):
-                size = int(data[:-2], 16)
-                data = await conn.readuntil(b"\r\n")
-                client.write(f"{size:x}\r\n".encode("utf-8") + data)
+                data_size = int(data[:-2], 16)
+                client.write(data)
+                size = 0
+                while size < data_size and not conn.is_closing and (data := await conn.read(min(data_size - size, MAX_BUFFER))):
+                    client.write(data)
+                    size += len(data)
+                # read 2 bytes \r\n
+                await conn.read(2)
+                client.write(b"\r\n")
                 await client.drain()
-                if size == 0:
+                if data_size == 0:
                     break
+
         elif content_length > 0:
             while content_length > 0 and not conn.is_closing and (data := await conn.read(min(content_length, MAX_BUFFER))):
                 if not data:
                     break
                 client.write(data)
                 content_length -= len(data)
-
         # if websocket
         websocket = (headers.get_one("Connection") or "").lower() == "upgrade" and (headers.get_one("Upgrade") or "").lower() == "websocket"
         event_stream = "text/event-stream" in (headers.get_one("Content-Type") or "").lower()
