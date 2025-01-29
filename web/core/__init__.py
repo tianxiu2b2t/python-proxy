@@ -57,6 +57,7 @@ async def process(
                 )
             })
             host = header.get_one("Host") or ""
+        logger.debug(f"host: {host}")
         if host is None:
             return
 

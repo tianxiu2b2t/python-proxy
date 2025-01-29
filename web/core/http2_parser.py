@@ -205,6 +205,7 @@ class HTTP2Stream:
             8888
         )
         conn[1].write(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        await conn[1].drain()
         streams: defaultdict[int, list[HTTP2Frame]] = defaultdict(list)
         while not self._client.is_closing:
             header_frame = await self.read_header_frame()

@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 from logger import logger
+from .http2_parser import HTTP2Stream
 from .common import statistics
 from ..protocols import Protocol
 from ..utils import Client, ClientStream, Header, get_status_code_name
@@ -46,9 +47,19 @@ async def process_backend_proxy(
     if protocol == Protocol.HTTP1:
         await process_http1_backend_proxy(client, hostname, proxy)
     elif protocol == Protocol.HTTP2:
-        logger.debug("HTTP2 backend proxy is not supported yet")
+        await process_http2_backend_proxy(client, hostname, proxy)
     #elif protocol == Protocol.HTTP2:
     #    await process_http2_backend_proxy(client, protocol, hostname, proxy)
+
+
+async def process_http2_backend_proxy(
+    client: Client,
+    host: str,
+    proxy: ProxyForward
+):
+    http2_stream = HTTP2Stream(client)
+    async for frame in http2_stream:
+        ...#print(frame)
 
 
 @dataclass
@@ -67,7 +78,6 @@ class HTTPStatus:
     proxy_url: str = ""
 
     keepalive: Optional[asyncio.Future] = None
-
 
 async def _forward_req(
     client: ClientStream,
@@ -138,7 +148,6 @@ async def _forward_req(
                 break
             conn.write(data)
             await conn.drain()
-
 
 async def _forward_resp(
     client: ClientStream,
@@ -259,7 +268,6 @@ async def forward_http1(
     except:
         raise
 
-
 async def process_http1_backend_proxy(
     client: Client,
     hostname: str,
@@ -334,7 +342,6 @@ async def send_response(
     )
     client.write(response.to_bytes())
 
-
 class HTTPResponse:
     def __init__(
         self,
@@ -361,7 +368,6 @@ class HTTPResponse:
             byte_header += f"{k}: {v}\r\n"
         byte_header += "\r\n"
         return byte_header.encode("utf-8") + content
-
 
 CONNECT_TIMEOUT_RESPONSE = HTTPResponse(
     status_code=504,
