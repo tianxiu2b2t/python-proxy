@@ -45,6 +45,8 @@ async def process_backend_proxy(
 ):
     if protocol == Protocol.HTTP1:
         await process_http1_backend_proxy(client, hostname, proxy)
+    elif protocol == Protocol.HTTP2:
+        logger.debug("HTTP2 backend proxy is not supported yet")
     #elif protocol == Protocol.HTTP2:
     #    await process_http2_backend_proxy(client, protocol, hostname, proxy)
 

@@ -665,13 +665,21 @@ class Response:
             request.client.write(send_chunk(b''))
             await request.client.drain()
         elif isinstance(content, Path):
-            with content.open("rb") as f:
-                await asyncio.get_event_loop().sendfile(
-                    request.client.transport,
-                    f,
-                    start_bytes,
-                    end_bytes
-                )
+            try:
+                with content.open("rb") as f:
+                    await asyncio.get_event_loop().sendfile(
+                        request.client.transport,
+                        f,
+                        start_bytes,
+                        end_bytes
+                    )
+            except (
+                ConnectionError,
+                ConnectionResetError
+            ):
+                ...
+            except:
+                raise
         else:
             logger.debug(content)
         return self

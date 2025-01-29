@@ -7,7 +7,7 @@ from service import acme, dns
 from .protocols import get_client_handshake_info
 from .utils import Client, ForwardAddress, ForwardConfig, find_origin, get_origin_cfg
 from .core import process, create_application, create_proxy
-from .core.app import Request, Response
+from .core.app import Request, Response, Router
 from .core.common import statistics
 
 pub_servers: dict[int, asyncio.Server] = {}
@@ -203,7 +203,6 @@ async def check_status():
             context = dict((v, k) for k, v in pri_servers.items())[server]
             pri_servers.pop(context)
             await _start_pri_server(context)
-
 
 async def unload():
     await statistics.stop()

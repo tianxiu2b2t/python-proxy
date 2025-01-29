@@ -24,7 +24,6 @@ async def main():
     # load modules
     for module in (
         scheduler,
-        database,
         web,
         dashboard,
         proxy

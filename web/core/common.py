@@ -1,7 +1,7 @@
 import asyncio
 from collections import defaultdict, deque
+import datetime
 import time
-from typing import Any
 
 from bson import ObjectId
 import config
@@ -34,6 +34,7 @@ class AccessLog:
         self.user_agent = user_agent
         self.http_version = http_version
         self.id = ObjectId()
+        self.utc_time = datetime.datetime.now(datetime.timezone.utc)
 
 class Statistics:
     def __init__(
@@ -120,39 +121,7 @@ class Statistics:
             self._db_access_logger.append(obj)
 
     async def _task_save_access_log(self):
-        # pgsql
-        async with database.pool.acquire(
-            timeout=5
-        ) as conn:
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS access_log (
-                    id CHAR(24) PRIMARY KEY,
-                    type VARCHAR(32),
-                    host VARCHAR(255),
-                    rtt INT,
-                    method VARCHAR(10),
-                    path TEXT,
-                    status INT,
-                    address VARCHAR(255),
-                    user_agent TEXT,
-                    http_version VARCHAR(10)
-                );
-            ''')
-            # create index
-            for idx in (
-                'host',
-                'rtt',
-                'method',
-                'path',
-                'status',
-                'address',
-                'user_agent',
-                'http_version'
-            ):
-                await conn.execute(f'''
-                    CREATE INDEX IF NOT EXISTS idx_access_log_{idx} ON access_log ({idx});
-                ''')
-            
+        collection = database.db.get_collection("access_log")
         while not self._stop:
             await asyncio.sleep(1)
             if len(self._db_access_logger) == 0:
@@ -160,41 +129,19 @@ class Statistics:
             objs = self._db_access_logger.copy()
             for obj in objs:
                 self._db_access_logger.remove(obj)
-            conn: database.asyncpg.Connection
-            async with database.pool.acquire(
-                timeout=5
-            ) as conn:
-                await conn.executemany('''
-
-                    INSERT INTO access_log (
-                        id, 
-                        type, 
-                        host, 
-                        rtt,
-                        method,
-                        path,
-                        status,
-                        address,
-                        user_agent,
-                        http_version
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-                    )
-                ''', [
-                    (
-                        str(obj.id),
-                        obj.type,
-                        obj.host,
-                        obj.rtt,
-                        obj.method,
-                        obj.path,
-                        obj.status,
-                        obj.address,
-                        obj.user_agent,
-                        obj.http_version
-                    )
-                    for obj in objs
-                ])
+            await collection.insert_many([{
+                "_id": obj.id,
+                "type": obj.type,
+                "host": obj.host,
+                "rtt": obj.rtt,
+                "method": obj.method,
+                "path": obj.path,
+                "status": obj.status,
+                "address": obj.address,
+                "user_agent": obj.user_agent,
+                "http_version": obj.http_version,
+                "utc_time": obj.utc_time
+            } for obj in objs])
     
     def start(self):
         self._logger_task = asyncio.get_running_loop().create_task(self._task_print_access_log())

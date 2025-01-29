@@ -1,12 +1,19 @@
 from pathlib import Path
 import web
+from database import db
 
 ASSETS = Path(__file__).parent / "assets"
+DB_PREFIX = "dashboard_"
 
 app = web.create_application(
     "*",
     8008
 )
+
+auth = web.Router("/auth")
+@auth.get("/")
+async def _():
+    ...
 
 app.mount("/assets/js", ASSETS / "js")
 app.mount("/assets/css", ASSETS / "css")

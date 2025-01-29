@@ -6,6 +6,7 @@ from .app import Application, Request, process_application
 from .proxy import ProxyForward, process_backend_proxy
 from ..utils import Client, ForwardConfig, Header
 from ..protocols import is_http1, is_http2, Protocol
+from .common import statistics
 
 import urllib.parse as urlparse
 
@@ -77,7 +78,8 @@ async def process(
         elif hostname in proxies:
             await process_backend_proxy(client, protocol, hostname, proxies[hostname])
         else:
-            logger.debug("Unavailable host:", hostname)
+            statistics.add_qps("unknown:" + hostname)
+            logger.error(f"unknown host: {hostname}")
     except (
         ConnectionAbortedError,
         ConnectionResetError,
@@ -86,4 +88,3 @@ async def process(
         ...
     except:
         logger.traceback()
-
