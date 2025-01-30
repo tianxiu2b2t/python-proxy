@@ -57,12 +57,13 @@ async def process(
                 )
             })
             host = header.get_one("Host") or ""
-        logger.debug(f"host: {host}")
         if host is None:
+            logger.info(client.peername, "no host")
             return
 
         hostname = urlparse.urlparse(f"http://{host}").hostname
         if hostname is None:
+            logger.info(client.peername, hostname, "no host")
             return
         protocol = None
         if is_http1(buffer):
