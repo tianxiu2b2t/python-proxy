@@ -1,11 +1,14 @@
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 import ssl
 import time
 from typing import Optional
 
+import anyio
+
 from logger import logger
-from .http2_parser import HTTP2Stream
+from .http2 import HTTP2GoAwayStream, HTTP2RstStream, HTTP2Stream, HTTP2FrameStream
 from .common import statistics
 from ..protocols import Protocol
 from ..utils import Client, ClientStream, Header, get_status_code_name
@@ -22,7 +25,7 @@ class ProxyForward:
     ):
         result = urlparse.urlparse(url)
         self.url = url
-        self.host = result.hostname
+        self.host = result.hostname or "localhost"
         self.port = result.port or (
             443 if result.scheme == "https" else 80
         )
@@ -52,14 +55,158 @@ async def process_backend_proxy(
     #    await process_http2_backend_proxy(client, protocol, hostname, proxy)
 
 
+async def open_connection( 
+    ip: str,
+    port: int,
+    tls: bool = False,
+):
+    context = None
+    if tls:
+        context = ssl._create_default_https_context()
+    return Client(*await asyncio.wait_for(asyncio.open_connection(ip, port, ssl=context), 5))
+
 async def process_http2_backend_proxy(
     client: Client,
     host: str,
     proxy: ProxyForward
 ):
+    await client.read(24)
     http2_stream = HTTP2Stream(client)
-    async for frame in http2_stream:
-        ...#print(frame)
+    connections: dict[int, asyncio.Task] = {}
+    status_dict: dict[int, HTTPStatus] = {}
+    async for stream in http2_stream:
+        if isinstance(stream, HTTP2GoAwayStream):
+            break
+        stream_id = stream.stream_id
+        if isinstance(stream, HTTP2FrameStream) and stream_id not in connections:
+            status = HTTPStatus()
+            status_dict[stream_id] = status
+            status.proxy_url = proxy.url
+            status.req_peername = client.peername[0]
+            status.req_host = stream.host
+            status.req_http_version = "HTTP/2"
+            status.req_method = stream.method
+            status.req_raw_path = stream.path
+            status.req_user_agent = stream.headers.get_one("user-agent") or ""
+            connections[stream_id] = asyncio.get_running_loop().create_task(
+                _forward_http2_to_http1(
+                    stream,
+                    await open_connection(
+                        proxy.host,
+                        proxy.port,
+                        proxy.is_ssl
+                    ),
+                    status_dict[stream_id]
+                )
+            )
+            connections[stream_id].add_done_callback(lambda task: (connections.pop(stream_id, None), status_dict.pop(stream_id, None)))
+            continue
+        if isinstance(stream, HTTP2RstStream) and stream_id in connections:
+            connections[stream_id].cancel()
+    for task in connections.values():
+        task.cancel()
+    status_dict.clear()
+            
+async def _forward_http2_to_http1(
+    stream: HTTP2FrameStream,
+    conn: Client,
+    status: 'HTTPStatus'
+):
+    try:
+        await asyncio.gather(*(
+            _forward_http2_req_to_http1(stream, conn, status),
+            _forward_http1_resp_to_http2(stream, conn, status)
+        ))
+    except Exception as e:
+        logger.traceback(f"Error while forwarding: {e}")
+    finally:
+        try:
+            await conn.close()
+        except:
+            ...
+
+async def _forward_http2_req_to_http1(
+    stream: HTTP2FrameStream,
+    conn: Client,
+    status: 'HTTPStatus'
+):
+    status.req_time = time.perf_counter_ns()
+    while not stream.reader.at_eof() and (buffer := await stream.reader.read(MAX_BUFFER)):
+        conn.write(buffer)
+        await conn.drain()
+
+async def _forward_http1_resp_to_http2(
+    stream: HTTP2FrameStream,
+    conn: Client,
+    status: 'HTTPStatus'
+):
+    while not conn.is_closing and (buffer := await conn.readuntil(b'\r\n\r\n')):
+        status.resp_time = time.perf_counter_ns()
+        status.accepted = True
+        buffer = buffer[:-4]
+        pre_byte_header, byte_header = buffer.split(b"\r\n", 1)
+        http_version, status_code, status_text = pre_byte_header.decode().split(" ", 2)
+        headers: Header = Header()
+        for line in byte_header.split(b"\r\n"):
+            if not line:
+                break
+            k, v = line.split(b": ", 1)
+            headers.add(k.decode(), v.decode())
+        await stream.send_response_header(
+            status_code=int(status_code),
+            headers=headers
+        )
+
+        statistics.print_access_log(
+            "Proxy",
+            status.req_host,
+            status.resp_time - status.req_time,
+            status.req_method,
+            status.req_raw_path,
+            int(status_code),
+            status.req_peername,
+            status.req_user_agent,
+            status.req_http_version
+        )
+
+        transfer = "Transfer-Encoding" in headers and (headers.get_one("Transfer-Encoding") or "").lower() == "chunked"
+        content_length = int(headers.get_one("Content-Length", None) or 0)
+
+        event_stream = "text/event-stream" in (headers.get_one("Content-Type") or "").lower()
+
+        if event_stream:
+            while not conn.is_closing and (data := await conn.read(MAX_BUFFER)):
+                if not data:
+                    break
+                await stream.send_data(data)
+                await stream.drain()
+
+        if not event_stream and transfer:
+            while not conn.is_closing and (data := await conn.readuntil(b"\r\n")):
+                data_size = int(data[:-2], 16)
+                size = 0
+                while size < data_size and not conn.is_closing and (data := await conn.read(min(data_size - size, MAX_BUFFER))):
+                    await stream.send_data(data)
+                    size += len(data)
+                # read 2 bytes \r\n
+                await conn.read(2)
+                if data_size == 0:
+                    break
+        elif content_length > 0:
+            while content_length > 0 and not conn.is_closing and (data := await conn.read(min(content_length, MAX_BUFFER))):
+                if not data:
+                    break
+                await stream.send_data(data)
+                content_length -= len(data)
+        if event_stream:
+            while not conn.is_closing and (data := await conn.read(MAX_BUFFER)):
+                if not data:
+                    break
+                await stream.send_data(data)
+
+        await stream.send_data(b"")
+        break
+        
 
 
 @dataclass
@@ -310,10 +457,11 @@ async def process_http1_backend_proxy(
 
 
     try:
-        context = None
-        if proxy.is_ssl:
-            context = ssl._create_default_https_context()
-        conn = Client(*await asyncio.wait_for(asyncio.open_connection(proxy.host, proxy.port, ssl=context), 5))
+        conn = await open_connection(
+            proxy.host,
+            proxy.port,
+            proxy.is_ssl
+        )
     
 
         await forward_http1(stream, conn, status)

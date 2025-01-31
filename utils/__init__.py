@@ -16,6 +16,25 @@ class Queue[T]:
         self._objs.append(obj)
         self._wake_up()
 
+
+    def offer_before(
+        self,
+        obj: T
+    ):
+        self._objs.appendleft(obj)
+        self._wake_up()
+
+
+    @property
+    def size(self):
+        return len(self._objs)
+    
+    @property
+    def empty(
+        self,
+    ):
+        return not self._objs
+
     
     async def poll(
         self,

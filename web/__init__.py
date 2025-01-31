@@ -63,7 +63,10 @@ async def _pri_handle(
     except:
         ...
     finally:
-        await client.close(10)
+        try:
+            await client.close(10)
+        except:
+            ...
 
 async def _pub_handle(
     reader: asyncio.StreamReader,

@@ -19,7 +19,6 @@ from bson import ObjectId
 
 from logger import logger
 from .common import statistics
-from ..core import http2_parser
 from ..protocols import Protocol
 
 from ..utils import STATUS_CODES, Client, ClientStream, Cookie, Header, get_status_code_name
@@ -789,5 +788,4 @@ async def process_application(
     elif protocol == Protocol.HTTP2:
         await client.read(24)
         stream = http2_parser.HTTP2Stream(client)
-        async for frame in stream:
-            print(frame)  
+        connections: dict[int, Client] = {}
