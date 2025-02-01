@@ -191,6 +191,7 @@ class HTTP2FrameStream:
         self.end_data_stream = False
         self.req_header = False
         self._waiter_headers = None
+        self.stream_size = stream.settings.settings_initial_window_size
 
     def feed_frame(self, frame: HTTP2Frame):
         if frame.header_frame.type == HTTP2FrameType.HEADERS:
@@ -303,6 +304,9 @@ class HTTP2GoAwayStream:
     def __repr__(self) -> str:
         return f'HTTP2GoAwayStream(last_stream_id={self.last_stream_id}, error_code={self.error_code}, debug_data={self.debug_data})'
 
+MAX_CONNECTION_WINDOW_SIZE = 2 ** 31 - 1
+STREAM_SIZE = 2 ** 24 - 1
+
 class HTTP2Stream:
     def __init__(
         self,
@@ -317,7 +321,6 @@ class HTTP2Stream:
         self.connection_window_size = self.settings.settings_initial_window_size
 
     async def __aiter__(self):
-        frame_payloads: defaultdict[int, bytes] = defaultdict(bytes)
         streams: dict[int, HTTP2FrameStream] = {}
         while not self.stream.is_closing:
             try:
@@ -344,6 +347,7 @@ class HTTP2Stream:
                 continue
             if frame_header.type == HTTP2FrameType.WINDOW_UPDATE:
                 self.connection_window_size += int.from_bytes(payload, 'big')
+                await self._send_window_update(frame_header.stream_id, MAX_CONNECTION_WINDOW_SIZE - self.connection_window_size)
                 continue
             if frame_header.type == HTTP2FrameType.RST_STREAM:
                 yield HTTP2RstStream(frame_header.stream_id, int.from_bytes(payload, 'big'))
@@ -361,11 +365,18 @@ class HTTP2Stream:
                 ))
                 yield stream
             if frame_header.type == HTTP2FrameType.DATA and frame_header.stream_id in streams:
-                streams[frame_header.stream_id].feed_frame(HTTP2Frame(
+                stream = streams[frame_header.stream_id]
+                self.connection_window_size -= frame_header.length
+                stream.stream_size -= frame_header.length
+                stream.feed_frame(HTTP2Frame(
                     frame_header,
                     frame_header.stream_id,
                     payload
                 ))
+                if stream.stream_size < STREAM_SIZE:
+                    diff = STREAM_SIZE - stream.stream_size
+                    await self._send_window_update(frame_header.stream_id, diff)
+                    stream.stream_size += diff
 
     async def _send_pong(self, stream_id: int, payload: bytes):
         header_frame = HTTP2HeaderFrame(
@@ -402,6 +413,20 @@ class HTTP2Stream:
             setting_value = int.from_bytes(frame.payload[i+2:i+6], 'big')
             setattr(self.settings, HTTP2Settings._idx[setting_id], setting_value)
             
+    async def _send_window_update(self, stream_id: int, size: int):
+        header_frame = HTTP2HeaderFrame(
+            type=HTTP2FrameType.WINDOW_UPDATE.value,
+            flags=0,
+            length=4,
+            stream_id=stream_id,
+        )
+        window_update_frame = HTTP2Frame(
+            header_frame=header_frame,
+            stream_id=stream_id,
+            payload=size.to_bytes(4, 'big'),
+        )
+        self.stream.write(header_frame.to_bytes() + window_update_frame.payload)
+        await self.stream.drain()
 
     async def _send_settings_ack(self, stream_id: int):
         header_frame = HTTP2HeaderFrame(

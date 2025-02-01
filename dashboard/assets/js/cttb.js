@@ -1,4 +1,8 @@
-class CTElement {
+export var app = null;
+var style = null
+var i18n = null;
+
+export class CTElement {
     constructor(
         tag = 'div',
     ) {
@@ -8,6 +12,15 @@ class CTElement {
             this.$base = tag;
         } else throw new Error('Tag must be a string');
         this._children = [];
+        this._i18n = {
+            key: null,
+            params: null
+        }
+        this._attr_i18n = {};
+        
+        // add into app
+        if (app.elements.map(e => e.$base).includes(this.$base)) return;
+        app.elements.push(this);
     }
     append(...children) {
         for (let child of children) {
@@ -20,9 +33,51 @@ class CTElement {
             this.$base.appendChild(child.$base);
             this._children.push(child);
         }
+        return this;
+    }
+    removeChild(child) {
+        if (CTElement.isDOM(child)) {
+            child = new CTElement(child);
+        }
+        if (!(child instanceof CTElement)) {
+            throw new Error('Child must be a CTElement');
+        }
+        this.$base.removeChild(child.$base);
+        this._children = this._children.filter(c => c.$base != child.$base);
+        return this;
+    }
+    clear() {
+        console.log(this)
+        this._children = [];
+        while (this.$base.firstChild != null) {
+            this.$base.removeChild(this.$base.firstChild);
+        }
+        return this;
     }
     classes(...classes) {
         this.$base.classList.add(...classes);
+        return this;
+    }
+    style(key, value) {
+        this.$base.style.setProperty(key, value);
+        return this;
+    }
+    styles(styles) {
+        for (let key in styles) {
+            this.$base.style.setProperty(key, styles[key]);
+        }
+        return this;
+    }
+    removeClasses(...classes) {
+        this.$base.classList.remove(...classes);
+        return this;
+    }
+    text(text) {
+        this.$base.innerText = text;
+        return this;
+    }
+    html(html) {
+        this.$base.innerHTML = html;
         return this;
     }
     listener(name, callback, options = {}) {
@@ -33,16 +88,58 @@ class CTElement {
         this.$base.remove();
         delete this; // remove reference
     }
-
+    i18n(key, params) {
+        this._i18n = {
+            key, 
+            params
+        }
+        this._render_i18n();
+        return this;
+    }
+    t18n(params) {
+        this._i18n.params = params;
+        this._render_i18n();
+        return this;
+    }
+    _render_i18n() {
+        if (this._i18n.key) {
+            this.$base.innerHTML = i18n.t(this._i18n.key, this._i18n.params);
+        }
+    }
+    attr(name, value) {
+        this.$base.setAttribute(name, value);
+        return this;
+    }
+    attr_i18n(name, key, params) {
+        this._attr_i18n[name] = {
+            key,
+            params
+        }
+        this._render_attr_i18n();
+        return this;
+    }
+    _render_attr_i18n() {
+        for (let name in this._attr_i18n) {
+            this.$base.setAttribute(name, i18n.t(this._attr_i18n[name].key, this._attr_i18n[name].params));
+        }
+    }
+    get children() {
+        return this._children;
+    }
     get base() {
         return this.$base;
     }
-
+    get inputValue() {
+        return this.$base.value;
+    }
     static isDOM(o) {
         return (
             typeof HTMLElement === "object" ? o instanceof HTMLElement : //DOM2
             o && typeof o === "object" && o !== null && o.nodeType === 1 && typeof o.nodeName==="string"
         );
+    }
+    static create(tag) {
+        return new CTElement(tag);
     }
 }
 class CTStyle {
@@ -51,6 +148,7 @@ class CTStyle {
         this.styles = {};
         this.medias = {}
         this.themes = {};
+        this.root = {}
 
         this._raf = null;
 
@@ -62,14 +160,14 @@ class CTStyle {
     }
     loadDefaultTheme() {
         this.addThemes("dark", {
-            "background": "rgb(24, 24, 24);",
-            "color": "rgba(0, 0, 0, 0.7);",
-            "dark-color": "#fff"
+            "background": "rgb(24, 24, 24)",
+            "color": "rgba(0, 0, 0, 0.7)",
+            "dark-color": "rgba(255, 255, 255, 0.8)"
         })
         this.addThemes("light", {
-            "background": "rgb(248, 248, 247);",
-            "color": "rgba(255, 255, 255, 0.7);",
-            "dark-color": "#000"
+            "background": "rgb(248, 248, 247)",
+            "color": "rgba(255, 255, 255, 0.7)",
+            "dark-color": "rgba(0, 0, 0, 0.8)"
         })
     }
     isDark() {
@@ -84,6 +182,16 @@ class CTStyle {
         }
         this.theme = theme;
         localStorage.setItem('theme', theme);
+        this.render();
+    }
+    addGlobal(key, value) {
+        this.root[key] = value;
+        this.render();
+    }
+    addGlobals(values) {
+        for (let key in values) {
+            this.addGlobal(key, values[key]);
+        }
     }
     addStyle(key, value) {
         if (!key.startsWith("@")) {
@@ -121,7 +229,6 @@ class CTStyle {
     _render() {
         this._raf = null;
         // first remove all styles
-        this._clear_render()
 
         var styles = {};
         // first theme
@@ -129,6 +236,9 @@ class CTStyle {
         var theme_values = {};
         for (let key in theme) {
             theme_values[`--${key}`] = this._parseToString(theme[key]);
+        }
+        for (let key in this.root) {
+            theme_values[`--${key}`] = this._parseToString(this.root[key]);
         }
         styles[':root'] = this._parseToString(theme_values);
         for (let key in this.styles) {
@@ -139,7 +249,6 @@ class CTStyle {
         requestAnimationFrame(() => {
             this._clear_render()
             styleRules.forEach(styleRule => {
-                console.log(styleRule)
                 this._sheet_render(styleRule);
             })
         })
@@ -190,12 +299,17 @@ class CTStyle {
 }
 class CTApplication {
     constructor() {
-        this.$document_body = document.body;
-        this._body = new CTElement(this.$document_body);
+        app = this;
         // find preloader
         this.routers = [];
+        this.elements = [];
+        this.i18n = new CTI18N();
         this.logger = console;
         this.style = style;
+
+        this.$document_body = document.body;
+        this._body = new CTElement(this.$document_body);
+
         this.init();
     }
     init() {
@@ -224,11 +338,9 @@ class CTApplication {
         return this._body;
     }
 }
-
 class CTRouteEvent {
 
 }
-
 class CTRoute {
     constructor(
         path,
@@ -238,7 +350,6 @@ class CTRoute {
         this.func = func;
     }
 }
-
 class CTRouter {
     constructor(
         prefix = "/",
@@ -251,13 +362,47 @@ class CTRouter {
     }
     
 }
-
+class CTI18NChangeEvent extends Event {
+    constructor() {
+        super("cti18nchange");
+    }
+}
+class CTI18N {
+    constructor() {
+        i18n = this;
+        this.defaultLang = "zh-cn"
+        this.currentLang = this.defaultLang;
+        this.languages = {}
+    }
+    setLang(lang) {
+        this.currentLang = lang;
+        // trigger event;
+        window.dispatchEvent(new CTI18NChangeEvent());
+    }
+    addLanguage(lang, key, value) {
+        if (!(lang in this.languages)) this.languages[lang] = {};
+        this.languages[lang][key] = value;
+    }
+    addLanguages(lang, obj) {
+        for (let key in obj) {
+            this.addLanguage(lang, key, obj[key]);
+        }
+    }
+    t(key, params) {
+        let lang = this.currentLang;
+        if (!(lang in this.languages) || !(key in this.languages[lang])) return key;
+        let value = this.languages[lang][key];
+        if (params != null) {
+            for (let key in params) {
+                value = value.replace("{" + key + "}", params[key]);
+            }
+        }
+        return value;
+    }
+}
 export function raf(callback) {
     return requestAnimationFrame(callback);
 }
-
-var app = null;
-var style = null
 
 export function createApp() {
     if (app == null) {

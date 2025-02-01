@@ -80,7 +80,6 @@ async def process_http2_backend_proxy(
         stream_id = stream.stream_id
         if isinstance(stream, HTTP2FrameStream) and stream_id not in connections:
             status = HTTPStatus()
-            status_dict[stream_id] = status
             status.proxy_url = proxy.url
             status.req_peername = client.peername[0]
             status.req_host = stream.host
@@ -88,6 +87,7 @@ async def process_http2_backend_proxy(
             status.req_method = stream.method
             status.req_raw_path = stream.path
             status.req_user_agent = stream.headers.get_one("user-agent") or ""
+            status_dict[stream_id] = status
             connections[stream_id] = asyncio.get_running_loop().create_task(
                 _forward_http2_to_http1(
                     stream,
@@ -141,7 +141,7 @@ async def _forward_http2_req_to_http1(
     while (buffer := await stream.reader.read(MAX_BUFFER)):
         conn.write(buffer)
         await conn.drain()
-        if stream.reader.at_eof():
+        if not buffer or stream.reader.at_eof():
             break
 
 async def _forward_http1_resp_to_http2(
@@ -150,6 +150,7 @@ async def _forward_http1_resp_to_http2(
     status: 'HTTPStatus'
 ):
     while not conn.is_closing and (buffer := await conn.readuntil(b'\r\n\r\n')):
+        print(buffer)
         status.resp_time = time.perf_counter_ns()
         status.accepted = True
         buffer = buffer[:-4]

@@ -29,3 +29,35 @@ export async function login(username, password) {
     }
     return false;
 }
+
+export function initAuthAPI() {
+    // fetch
+
+    let oldFetch = window.fetch;
+    window.fetch = async (url, options) => {
+        if (token != null) {
+            options.headers = {
+                ...options.headers,
+                'Authorization': token
+            }
+        }
+        console.log(url)
+        return await oldFetch(url, options);
+    }
+    // xhr
+    let oldXMLHttpRequest = window.XMLHttpRequest;
+    window.XMLHttpRequest = function () {
+        var xhr = new oldXMLHttpRequest();
+        xhr.addEventListener('readystatechange', function () {
+            if (xhr.readyState == 4) {
+                if (xhr.status == 401) {
+                    localStorage.removeItem('auth-token');
+                    window.location.href = '/login';
+                }
+            }
+        });
+        return xhr;
+    }
+}
+
+initAuthAPI()

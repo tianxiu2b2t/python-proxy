@@ -2,6 +2,7 @@ import hashlib
 import random
 import string
 import time
+from typing import Optional
 import database
 from utils import JWT
 import web
@@ -18,26 +19,59 @@ UNAUTHORIZATED = web.Response(
     content="Unauthorized"
 )
 
+class TokenUtils:
+    @staticmethod
+    async def check(
+        request: web.Request
+    ) -> Optional[str]:
+        authorization = JWT(
+            request.headers.get_one("Authorization") or ""
+        )
+        user_id = None
+        authorization.secret = global_secret
+        try:
+            user_id = ObjectId(authorization.decode())
+        except:
+            return None
+        r = await db.get_collection("auth_users").find_one({"_id": user_id})
+        if r is None:
+            return None
+        if authorization.exp is None:
+            return None
+        if authorization.exp < int(time.time()):
+            return None
+        return r["username"]
+    
+    @staticmethod
+    async def create(
+        id: Optional[str] = None,
+        username: Optional[str] = None
+    ):
+        if id is None and username is None:
+            raise Exception("id or username must be provided")
+        if id is not None:
+            r = await db.get_collection("auth_users").find_one({"_id": ObjectId(id)})
+        elif username is not None:
+            r = await db.get_collection("auth_users").find_one({"username": username})
+        if r is None:
+            raise Exception("User not found")
+        return JWT(
+            str(r["_id"]),
+            global_secret,
+            int(time.time() + 60 * 60)
+        ).encode()
+
 @router.get("/")
 async def _(
     request: web.Request
 ):
-    authorization = JWT(
-        request.headers.get_one("Authorization") or ""
-    )
-    user_id = None
-    authorization.secret = global_secret
-    try:
-        user_id = ObjectId(authorization.decode())
-    except:
-        return UNAUTHORIZATED
-    r = await db.get_collection("auth_users").find_one({"_id": user_id})
+    r = await TokenUtils.check(request)
     if r is None:
         return UNAUTHORIZATED
     return web.Response(
         status=200,
         content={
-            "username": r["username"]
+            "username": r
         }
     )
 
@@ -55,13 +89,12 @@ async def _(
     return web.Response(
         status=200,
         headers=Header({
-            "Authorization": JWT(
-                str(r["_id"]),
-                global_secret,
-                int(time.time() + 60 * 60)
-            ).encode()
+            "Authorization": await TokenUtils.create(
+                id=str(r["_id"]),
+            )
         })
     )
+
 
 
 async def init_variables():

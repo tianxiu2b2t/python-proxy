@@ -150,13 +150,17 @@ class JWT:
         self,
     ):
         assert self._secret is not None
+        data = {}
+        if self._exp is not None:
+            data["exp"] = self._exp
+        if self._iat is not None:
+            data["iat"] = self._iat
+        data["payload"] = self._payload
         payload = b".".join([base64.b64encode(
             json.dumps(self.defaultHeaders).encode("utf-8")
         ),
         base64.b64encode(
-            json.dumps({
-                "payload": self._payload
-            }).encode("utf-8")
+            json.dumps(data).encode("utf-8")
         )])
         sign = base64.b64encode(
             hmac.new(

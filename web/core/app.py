@@ -509,7 +509,6 @@ class Request:
         content = b''
         while len(content) < content_length:
             chunk = await self._client.read(16384)
-            print(chunk)
             if not chunk:
                 break
             content += chunk
