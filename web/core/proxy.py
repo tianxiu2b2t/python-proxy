@@ -150,7 +150,6 @@ async def _forward_http1_resp_to_http2(
     status: 'HTTPStatus'
 ):
     while not conn.is_closing and (buffer := await conn.readuntil(b'\r\n\r\n')):
-        print(buffer)
         status.resp_time = time.perf_counter_ns()
         status.accepted = True
         buffer = buffer[:-4]
