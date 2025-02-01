@@ -131,9 +131,18 @@ async def _forward_http2_req_to_http1(
     status: 'HTTPStatus'
 ):
     status.req_time = time.perf_counter_ns()
-    while not stream.reader.at_eof() and (buffer := await stream.reader.read(MAX_BUFFER)):
+    byte_header = f'{stream.method} {stream.path} HTTP/1.1\r\n'
+    for k, v in stream.headers.items():
+        for val in v:
+            byte_header += f'{k}: {val}\r\n'
+    byte_header += "\r\n"
+    conn.write(byte_header.encode())
+    await conn.drain()
+    while (buffer := await stream.reader.read(MAX_BUFFER)):
         conn.write(buffer)
         await conn.drain()
+        if stream.reader.at_eof():
+            break
 
 async def _forward_http1_resp_to_http2(
     stream: HTTP2FrameStream,

@@ -12,6 +12,8 @@ from typing import Any, AsyncGenerator, AsyncIterable, AsyncIterator, Callable, 
 import urllib.parse as urlparse
 import uuid
 
+from .http2 import HTTP2FrameStream, HTTP2GoAwayStream, HTTP2RstStream, HTTP2Stream
+
 from .compresstor import compress
 
 from . import filetype
@@ -504,7 +506,14 @@ class Request:
     
     async def read(self):
         content_length = int(self.headers.get_one("Content-Length") or 0)
-        return await self._client.read(content_length)
+        content = b''
+        while len(content) < content_length:
+            chunk = await self._client.read(16384)
+            print(chunk)
+            if not chunk:
+                break
+            content += chunk
+        return content
 
     async def json(self):
         body = await self.read()
@@ -665,32 +674,46 @@ class Response:
             await request.client.drain()
         elif isinstance(content, Path):
             try:
-                with content.open("rb") as f:
-                    await asyncio.get_event_loop().sendfile(
-                        request.client.transport,
-                        f,
-                        start_bytes,
-                        end_bytes
-                    )
+                await self._send_file(request, content, start_bytes, end_bytes)
             except (
                 ConnectionError,
                 ConnectionResetError
             ):
                 ...
             except:
+                logger.traceback()
                 raise
         else:
             logger.debug(content)
+        request.client.feed_eof()
         return self
-    
-    def add_content_type_encoding(self, headers: dict[str, Any]):
+
+    async def _send_file(self, request: Request, content: Path, start_bytes: int, end_bytes: Optional[int] = None):
+        # check support
+        with content.open("rb") as f:
+            try:
+                return await asyncio.get_event_loop().sendfile(
+                        request.client.transport,
+                        f,
+                        start_bytes,
+                        end_bytes
+                    )
+            except AssertionError:
+                while (data := f.read(1024 * 1024)):
+                    if not data:
+                        break
+                    request.client.write(data)
+                    await request.client.drain()
+
+
+    def add_content_type_encoding(self, headers: Header):
         if 'Content-Type' not in headers:
             return 
-        content_type = headers['Content-Type'] or ""
+        content_type = headers.get_one('Content-Type') or ""
         if 'charset=' in content_type:
             return
         if 'text/' in content_type or 'application/json' in content_type:
-            headers['Content-Type'] += '; charset=utf-8'
+            headers['Content-Type'] = f'{content_type}; charset=utf-8'
 
 
 class LocationResponse(Response):
@@ -787,5 +810,97 @@ async def process_application(
             await client.close(2)
     elif protocol == Protocol.HTTP2:
         await client.read(24)
-        stream = http2_parser.HTTP2Stream(client)
-        connections: dict[int, Client] = {}
+        http2_stream = HTTP2Stream(client)
+        connections: dict[int, asyncio.Task] = {}
+        async for stream in http2_stream:
+            if isinstance(stream, HTTP2GoAwayStream):
+                break
+            stream_id = stream.stream_id
+            if isinstance(stream, HTTP2FrameStream) and stream_id not in connections:
+                connections[stream_id] = asyncio.get_running_loop().create_task(
+                    _handle_http2(
+                        stream,
+                        app
+                    )
+                )
+                connections[stream_id].add_done_callback(lambda task: connections.pop(stream_id, None))
+                continue
+            if isinstance(stream, HTTP2RstStream) and stream_id in connections:
+                connections[stream_id].cancel()
+        for task in connections.values():
+            task.cancel()
+
+
+async def _handle_http2(
+    stream: HTTP2FrameStream,
+    app: Application
+):
+    client = ClientStream(tls=stream.stream.stream.is_tls)
+    try:
+        await asyncio.gather(
+            _handle_http2_req(
+                stream,
+                client,
+                app
+            ),
+            _handle_http2_resp(
+                stream,
+                client,
+                app
+            )
+        )
+    except asyncio.CancelledError:
+        ...
+    except:
+        logger.traceback()
+    
+async def _handle_http2_resp(
+    stream: HTTP2FrameStream,
+    client: ClientStream,
+    app: Application
+):
+    while (buffer := await client.readuntil_write(b"\r\n\r\n")):
+        buffer = buffer[:-4]
+        pre_byte_header, byte_header = buffer.split(b"\r\n", 1)
+        http_version, status_code, reason = pre_byte_header.decode("utf-8").split(" ", 2)
+        headers = Header({
+            k: v for k, v in (
+                line.decode("utf-8").split(": ", 1) for line in byte_header.split(b"\r\n")
+            )
+        })
+        await stream.send_response_header(
+            int(status_code),
+            headers,
+        )
+        while (buffer := await client.read_write(16384)):
+            if not buffer:
+                break
+            await stream.send_data(buffer)
+        await stream.send_data(b'')
+
+async def _handle_http2_req(
+    stream: HTTP2FrameStream,
+    client: ClientStream,
+    app: Application
+):
+    req = Request(client, stream.method, stream.path, "HTTP/2", stream.headers, stream.stream.stream.peername)
+    try:
+        await asyncio.gather(
+            app.handle(req),
+            _handle_http2_req_content(stream, client)
+        )
+    except asyncio.CancelledError:
+        ...
+    except:
+        logger.traceback()
+
+async def _handle_http2_req_content(
+    stream: HTTP2FrameStream,
+    client: ClientStream,
+):
+    while (buffer := await stream.reader.read(16384)):
+        if not buffer:
+            break
+        client.feed_read_data(buffer)
+        if stream.reader.at_eof():
+            break

@@ -190,6 +190,7 @@ class HTTP2FrameStream:
         self.buffer: bytes = b''
         self.end_data_stream = False
         self.req_header = False
+        self._waiter_headers = None
 
     def feed_frame(self, frame: HTTP2Frame):
         if frame.header_frame.type == HTTP2FrameType.HEADERS:
@@ -203,27 +204,24 @@ class HTTP2FrameStream:
                         self.path = v
                     elif k == 'authority':
                         self.host = v
+                        self.headers['host'] = v
                     continue
                 self.headers.add(k, v)
-            self._feed_header_request()
+            self.req_header = True
+            if self._waiter_headers:
+                self._waiter_headers.set_result(True)
         if not self.req_header:
             logger.warning('Request header not received')
             return
         if frame.header_frame.type == HTTP2FrameType.DATA:
             self.reader.feed_data(frame.payload)
+            if frame.header_frame.end_stream:
+                self.reader.feed_eof()
 
-    def _feed_header_request(self):
-        if not self.method or not self.path or not self.host:
-            raise ValueError('Missing required header fields')
-        buf = f'{self.method} {self.path} HTTP/1.1\r\nHost: {self.host}\r\n'.encode()
-        for k, v in self.headers.items():
-            if k.startswith(':'):
-                continue
-            for val in v:
-                buf += f'{k}: {val}\r\n'.encode()
-        buf += b'\r\n'
-        self.reader.feed_data(buf)
-        self.req_header = True
+    @property
+    def wait_headers(self):
+        self._waiter_headers = asyncio.get_running_loop().create_future()
+        return self._waiter_headers
 
     async def send_response_header(self, status_code: int, headers: Header, end_stream: bool = False):
         header_list = [

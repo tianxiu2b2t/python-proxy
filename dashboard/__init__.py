@@ -1,4 +1,6 @@
 from pathlib import Path
+from . import auth
+from utils import JWT
 import web
 from database import db
 
@@ -10,16 +12,19 @@ app = web.create_application(
     8008
 )
 
-auth = web.Router("/auth")
-@auth.get("/")
-async def _():
-    ...
+    
 
 app.mount("/assets/js", ASSETS / "js")
 app.mount("/assets/css", ASSETS / "css")
 app.mount("/assets/fonts", ASSETS / "fonts")
 app.mount("/assets/img", ASSETS / "img")
 app.mount("/", ASSETS / "index.html")
+
+@app.get("/")
+def _():
+    return ASSETS / "index.html"
+
+app.add_router(auth.router)
 
 async def init():
     """Initialize the dashboard."""
@@ -28,3 +33,5 @@ async def init():
         None,
         True
     )
+
+    await auth.init()

@@ -287,6 +287,7 @@ class ClientStream:
         self._write_buffers: deque[bytes] = deque()
         self._wait_write: deque[asyncio.Future] = deque()
         self._tls = tls
+        self._eof = False
 
     def set_client(self, client: Client):
         self._client = client
@@ -304,7 +305,9 @@ class ClientStream:
             try:
                 await fut
             finally:
-                self._wait_read.remove(fut)
+                if fut in self._wait_read:
+                    self._wait_read.remove(fut)
+
         if self._read_buffers:
             buf = self._read_buffers.popleft()
             ret, buf = buf[:n], buf[n:]
@@ -331,6 +334,45 @@ class ClientStream:
             raise EOFError
         return ret + await self._client.readuntil(separator)
     
+    async def read_write(self, n: int):
+        if self._client is not None:
+            raise RuntimeError("read_write can only be called on fake client")
+        if len(self._write_buffers) == 0 and not self._eof:
+            fut = asyncio.Future()
+            self._wait_write.append(fut)
+            try:
+                await fut
+            finally:
+                self._wait_write.remove(fut)
+        if len(self._write_buffers) == 0 and self._eof:
+            return b''
+        buf = self._write_buffers.popleft()
+        ret, buf = buf[:n], buf[n:]
+        if buf:
+            self._write_buffers.appendleft(buf)
+        return ret
+    
+    async def readuntil_write(self, separator: bytes):
+        if self._client is not None:
+            raise RuntimeError("readuntil_write can only be called on fake client")
+        if len(self._write_buffers) == 0:
+            fut = asyncio.Future()
+            self._wait_write.append(fut)
+            try:
+                await fut
+            finally:
+                if fut in self._wait_write:
+                    self._wait_write.remove(fut)
+        buf = self._write_buffers.popleft()
+        if separator in buf:
+            ret, body = buf.split(separator, maxsplit=1)
+            if body:
+                self._write_buffers.appendleft(body)
+            ret += separator
+            return ret
+        ret = buf
+        return ret + await self.readuntil_write(separator)
+
     async def close(self):
         if self._client is not None:
             await self._client.close(5)
@@ -357,6 +399,14 @@ class ClientStream:
         while self._write_buffers and self._wait_write:
             fut = self._wait_write.popleft()
             fut.set_result(True)
+
+    def feed_eof(self):
+        self._eof = True
+        if self._client is not None:
+            return
+        for fut in self._wait_read:
+            fut.set_result(True)
+        self._wait_read.clear()
 
     @property
     def transport(self):

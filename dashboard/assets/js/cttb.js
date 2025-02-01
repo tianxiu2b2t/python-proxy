@@ -7,6 +7,19 @@ class CTElement {
         } else if (CTElement.isDOM(tag)) {
             this.$base = tag;
         } else throw new Error('Tag must be a string');
+        this._children = [];
+    }
+    append(...children) {
+        for (let child of children) {
+            if (CTElement.isDOM(child)) {
+                child = new CTElement(child);
+            }
+            if (!(child instanceof CTElement)) {
+                throw new Error('Child must be a CTElement');
+            }
+            this.$base.appendChild(child.$base);
+            this._children.push(child);
+        }
     }
     classes(...classes) {
         this.$base.classList.add(...classes);
@@ -178,14 +191,15 @@ class CTStyle {
 class CTApplication {
     constructor() {
         this.$document_body = document.body;
+        this._body = new CTElement(this.$document_body);
         // find preloader
+        this.routers = [];
         this.logger = console;
-
         this.style = style;
-
         this.init();
     }
     init() {
+        this.routers.push(new CTRouter("/"))
         window.addEventListener('DOMContentLoaded', () => {
             let preloader = this.findElement('.preloader');
             if (preloader != null) {
@@ -202,6 +216,12 @@ class CTApplication {
         let element = document.querySelector(selector);
         if (element == null) return null;
         return new CTElement(element);
+    }
+    createElement(tag) {
+        return new CTElement(tag);
+    }
+    get body() {
+        return this._body;
     }
 }
 
@@ -220,8 +240,11 @@ class CTRoute {
 }
 
 class CTRouter {
-    constructor() {
+    constructor(
+        prefix = "/",
+    ) {
         this.routes = [];
+        this.prefix = prefix;
     }
     addRoute(path, func) {
         this.routes.push(new CTRoute(path, func));
@@ -244,4 +267,9 @@ export function createApp() {
         globalThis.app = app;
     }
     return app;
+}
+export function createRouter(
+    prefix = "/"
+) {
+    return new CTRouter(prefix);
 }
