@@ -233,6 +233,10 @@ class HTTP2ClientConnection(HTTP2Connection):
         super().__init__(client)
         self.connection: Optional['HTTP2WrapperConnection'] = None
         self.status: defaultdict[int, HTTPStatus] = defaultdict(HTTPStatus)
+        self._task = None
+
+    def start_loop(self):
+        self._task = asyncio.get_running_loop().create_task(self.recv())
 
     async def send(self):
         await self.send_settings()
@@ -274,7 +278,7 @@ class HTTP2ClientConnection(HTTP2Connection):
                     status_code = int(v)
             if status_code is not None: 
                 status.resp_time = time.perf_counter_ns()
-    
+
                 statistics.print_access_log(
                     "Proxy",
                     status.req_host,
@@ -299,7 +303,6 @@ class HTTP2WrapperConnection(HTTP2Connection):
         client: Client,
         hostname: str,
         proxy: ProxyForward,
-        connection: Optional[HTTP2ClientConnection],
     ):
         super().__init__(
             client
@@ -307,10 +310,10 @@ class HTTP2WrapperConnection(HTTP2Connection):
         self.hostname = hostname
         self.proxy = proxy
         self.http1_streams: dict[int, HTTP1Stream] = {}
-        self.connection = connection
-
-        if self.connection is not None:
-            self.connection.connection = self
+        self.connection: Optional[HTTP2ClientConnection] = None
+        self.http2_frames: deque[HTTP2Frame] = deque()
+        self.cfg_grpc = False
+        self.grpc = False
 
 
     async def recv(self):
@@ -344,16 +347,16 @@ class HTTP2WrapperConnection(HTTP2Connection):
         else:
             self.client_flow.update_stream_window(frame.stream_id, inc)
 
-        if self.connection is not None and frame.stream_id not in self.http1_streams:
-            await self.connection.send_frame(frame)
+        if frame.stream_id not in self.http1_streams:
+            await self.send_http2_connection(frame)
 
     async def _recv_rst_stream(self, frame: HTTP2Frame):
         stream_id = frame.stream_id
         if stream_id in self.http1_streams:
             asyncio.ensure_future(self.http1_streams[stream_id].close())
             del self.http1_streams[stream_id]
-        elif self.connection is not None:
-            await self.connection.send_frame(frame)
+        else:
+            await self.send_http2_connection(frame)
 
     async def _recv_headers(self, frame: HTTP2Frame):
         payload = frame.payload
@@ -376,12 +379,18 @@ class HTTP2WrapperConnection(HTTP2Connection):
             headers.add(header[0], header[1])
         
         grpc = "application/grpc" in (headers.get_one("content-type") or "")
-        if grpc and self.connection is None:
+        if not self.cfg_grpc:
+            self.cfg_grpc = True
+            self.grpc = grpc
+        if grpc and not self.proxy.http2:
+            await self.init_http2_connection()
             # send rst stream
             await self.send_rst_stream(frame.stream_id, HTTP2Error.PROTOCOL_ERROR)
             return
-        
-        if grpc and self.connection is not None:
+        if grpc:
+            if self.connection is None:
+                await self.init_http2_connection()
+            assert self.connection is not None
             status = self.connection.status[frame.stream_id]
             status.req_peername = self.client.peername[0]
             status.req_host = headers.get_one(":authority")
@@ -399,7 +408,7 @@ class HTTP2WrapperConnection(HTTP2Connection):
             
             status.req_time = time.perf_counter_ns()
 
-            await self.connection.send_frame(
+            await self.send_http2_connection(
                 HTTP2Frame(
                     HTTP2FrameType.HEADERS,
                     HTTP2FrameFlags.END_HEADERS,
@@ -432,8 +441,8 @@ class HTTP2WrapperConnection(HTTP2Connection):
         if frame.padded:
             payload = payload[:-frame.payload[0]]
 
-        if frame.stream_id not in self.http1_streams and self.connection is not None:
-            await self.connection.send_frame(frame)
+        if frame.stream_id not in self.http1_streams:
+            await self.send_http2_connection(frame)
             return
 
         if frame.stream_id not in self.http1_streams:
@@ -463,6 +472,36 @@ class HTTP2WrapperConnection(HTTP2Connection):
         self.http1_streams.clear()
         await self.client.close()
 
+    async def init_http2_connection(self):
+        conn = await open_connection(
+            self.proxy.host,
+            self.proxy.port,
+            self.proxy.is_ssl
+        )
+        conn.write(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
+        await conn.drain()
+        conn = HTTP2ClientConnection(
+            conn
+        )
+        await conn.send()
+        self.connection = conn
+        self.connection.connection = self
+        conn.start_loop()
+
+
+    async def send_http2_connection(self, frame: HTTP2Frame):
+        if self.cfg_grpc and not self.grpc:
+            return
+        if self.connection is None:
+            self.http2_frames.append(frame)
+            return
+        frames = []
+        if self.http2_frames:
+            frames.extend(self.http2_frames)
+            self.http2_frames.clear()
+        frames.append(frame)
+        print(frames)
+        await self.connection.send_frame(*frames)
 
     __recv_mappings = {
         HTTP2FrameType.SETTINGS: _recv_settings_frame,
@@ -485,31 +524,16 @@ async def process_http2_backend_proxy(
     # read magic
     await client.read(24)
     conn = None
-    if proxy.http2:
-        conn = await open_connection(
-            proxy.host,
-            proxy.port,
-            proxy.is_ssl
-        )
-        conn.write(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
-        await conn.drain()
-        conn = HTTP2ClientConnection(
-            conn
-        )
     connection = HTTP2WrapperConnection(
         client,
         hostname,
         proxy,
-        conn
     )
     try:
         coroutines = [
             connection.recv(),
             connection.send()
         ]
-        if conn is not None:
-            coroutines.append(conn.recv())
-            coroutines.append(conn.send())
         await asyncio.gather(*coroutines)
     except (
         asyncio.exceptions.IncompleteReadError,
