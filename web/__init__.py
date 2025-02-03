@@ -156,6 +156,10 @@ async def _start_pub_server(
 
 async def init():
     global check_task
+
+    check_task = asyncio.get_running_loop().create_task(check_status())
+    statistics.start()
+
     await start_server(80, None)
 
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -177,9 +181,6 @@ async def init():
         "api"
     )
     await start_server(443, cert, False)
-
-    check_task = asyncio.get_running_loop().create_task(check_status())
-    statistics.start()
 
 async def check_status():
     while True:

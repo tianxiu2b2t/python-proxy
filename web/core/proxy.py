@@ -83,7 +83,7 @@ class HTTP1Stream:
         self.task = asyncio.create_task(self._loop())
 
         self.status.req_host = self.connection.hostname
-        self.status.req_peername = self.conn.peername[0]
+        self.status.req_peername = self.connection.client.peername[0]
         self.status.req_http_version = "HTTP/2"
 
     async def _loop(self):
