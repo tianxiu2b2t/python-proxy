@@ -128,21 +128,24 @@ class Statistics:
             if len(self._db_access_logger) == 0:
                 continue
             objs = self._db_access_logger.copy()
-            for obj in objs:
-                self._db_access_logger.remove(obj)
-            await collection.insert_many([{
-                "_id": obj.id,
-                "type": obj.type,
-                "host": obj.host,
-                "rtt": obj.rtt,
-                "method": obj.method,
-                "path": obj.path,
-                "status": obj.status,
-                "address": obj.address,
-                "user_agent": obj.user_agent,
-                "http_version": obj.http_version,
-                "utc_time": obj.utc_time
-            } for obj in objs])
+            try:
+                await collection.insert_many([{
+                    "_id": obj.id,
+                    "type": obj.type,
+                    "host": obj.host,
+                    "rtt": obj.rtt,
+                    "method": obj.method,
+                    "path": obj.path,
+                    "status": obj.status,
+                    "address": obj.address,
+                    "user_agent": obj.user_agent,
+                    "http_version": obj.http_version,
+                    "utc_time": obj.utc_time
+                } for obj in objs])
+                for obj in objs:
+                    self._db_access_logger.remove(obj)
+            except:
+                logger.traceback("Error while saving access log to database")
     
     def start(self):
         self._logger_task = asyncio.get_running_loop().create_task(self._task_print_access_log())
