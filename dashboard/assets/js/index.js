@@ -3,33 +3,6 @@ import { checkAuth, login } from './auth.js';
 import { CTAlert, CTSVG } from './componts.js';
 
 
-const app = createApp();
-const router = app.routers[0];
-const alerts = new CTAlert();
-
-app.style.addStyles({
-    "body": {
-        "background-color": "var(--background)",
-        "height": "100vh"
-    }
-})
-
-app.style.addGlobals({
-    'transition': '150ms cubic-bezier(0.4, 0, 0.2, 1)'   
-})
-
-app.style.addThemes('dark', {
-    'border-color': 'rgba(196, 196, 196, .257)',
-    'box-shadow': 'rgba(0, 0, 0, .5)',
-    "main-color": "rgb(244, 209, 180)",
-})
-app.style.addThemes('light', {
-    'border-color': 'rgba(50, 50, 50, .257)',
-    'box-shadow': 'rgba(50, 50, 50, .1)',
-    "main-color": "rgb(15, 198, 194)",
-})
-app.i18n.setLang('zh-cn')
-
 class AuthPage extends CTElement {
     constructor() {
         super("div");
@@ -50,8 +23,8 @@ class AuthPage extends CTElement {
         })
 
 
-        this.username = CTElement.create("input").classes("auth-input").attr_i18n("placeholder", "auth.username")
-        this.password = CTElement.create("input").classes("auth-input").attr_i18n("placeholder", "auth.password")
+        this.username = CTElement.create("input").classes("auth-input").attr_i18n("placeholder", "auth.username").attr("type", "username")
+        this.password = CTElement.create("input").classes("auth-input").attr_i18n("placeholder", "auth.password").attr("type", "password")
         this.box_username = CTElement.create("div").classes("auth-input-box").append(this.username)
         this.box_password = CTElement.create("div").classes("auth-input-box").append(this.password)
         this.button = CTElement.create("button").classes("auth-button").i18n("auth.login").listener("click", async () => {
@@ -93,7 +66,7 @@ class AuthPage extends CTElement {
                 setTimeout(() => {
                     //super.clear()
                     if (res) {
-                        app.body.removeChild(this);
+                        app.route("/")
                     } else {
                         super.clear()
                         super.append(this.login_container)
@@ -116,20 +89,32 @@ class AuthPage extends CTElement {
             this.processing_loading,
             this.processing_success
         )
-        
+        var inputs = [
+            this.username,
+            this.password
+        ]
         for (const { input, box } of [
             { input: this.username, box: this.box_username },
             { input: this.password, box: this.box_password }
         ]) {
             input.listener("focus", () => {
-                console.log(box)
                 box.classes("active")
             }).listener("blur", () => {
                 box.removeClasses("active")
+            }).listener("keydown", (event) => {
+                if (event.key == "Enter") {
+                    // find empty input
+                    for (const input of inputs) {
+                        if (input.inputValue.trim().length == 0) {
+                            input.focus()
+                            return;
+                        }
+                    }
+                    this.button.click()
+                }
             })
         }
 
-        console.log(this.login_container)
         super.append(this.login_container)
 
         app.style.addThemes('dark', {
@@ -141,14 +126,12 @@ class AuthPage extends CTElement {
 
         app.style.addStyles({
             ".auth-page": {
-                "width": "100vw",
-                "height": "100vh",
+                "width": "100%",
+                "height": "100%",
                 "display": "flex",
                 "justify-content": "center",
                 "align-items": "center",
-                "position": "fixed",
-                "z-index": "9999",
-                "color": "var(--dark-color)",
+                "color": "var(--color)",
                 "background": "var(--background)"
             },
             ".auth-container": {
@@ -199,19 +182,15 @@ class AuthPage extends CTElement {
                 "border": "none",
                 "border-radius": "4px",
                 "background-color": "var(--main-color)",
-                "color": "var(--color)",
+                "color": "var(--dark-color)",
                 "font-size": "0.875rem",
                 "cursor": "pointer",
             },
             "@media (max-width: 600px)": {
                 ".auth-container": {
                     "min-width": "100%",
-                    "min-height": "100%",
-                    "border-radius": "0",
-                    "padding": "0",
                 }
             },
-
             ".auth-container.processing": {
                 "display": "flex",
                 "flex-direction": "column",
@@ -240,16 +219,151 @@ class AuthPage extends CTElement {
                 }
             }
         })
+
+        // add router
+        app.addRoute("/auth/login", () => {
+            authPage.render();
+        })
+
+        app.router.beforeHandler(() => {
+            body.removeChild(this)
+        })
+    }
+    render() {
+        body.append(this);
     }
 }
-
+class Application extends CTElement {
+    constructor() {
+        super("div")
+    }
+}
+const app = createApp();
+const alerts = new CTAlert();
 const authPage = new AuthPage();
+const application = new Application();
+const body = CTElement.create("div").classes("app");
+const header_left = CTElement.create("div").classes("header-left").append(
+    CTElement.create("h2").text(document.title)
+)
+const header_right = CTElement.create("div").classes("header-right")
+
+function initStyle() {
+    app.style.addStyles({
+        "body": {
+            "color": "var(--color)",
+            "background-color": "var(--background)",
+            "height": "100vh"
+        },
+        "::-webkit-scrollbar, html ::-webkit-scrollbar": {
+            "width": "5px",
+            "height": "5px",
+            "border-radius": "10px"
+        },
+        "::-webkit-scrollbar-thumb, html ::-webkit-scrollbar-thumb": {
+            "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 6px inset",
+            "background-color": "rgb(102, 102, 102)",
+            "border-radius": "10px"
+        },
+        "header": {
+            "position": "fixed",
+            "top": "0",
+            "left": "0",
+            "width": "100%",
+            "height": "3.5rem",
+            "background-color": "var(--background)",
+            "z-index": "99999",
+            "display": "flex",
+            "justify-content": "space-between",
+            "padding": "8px 16px",
+        },
+        "header svg": {
+            "fill": "var(--color)",
+            "height": "100%",
+            "width": "100%",
+            "cursor": "pointer"
+        },
+        ".header-left, .header-right": {
+            "width": "auto",
+            "height": "100%"
+        },
+        ".container": {
+            "display": "flex",
+            "flex-flow": "column",
+            "justify-content": "space-between",
+            "height": "100vh",
+            "width": "100vw",
+            "overflow-y": "auto"
+        },
+        ".app-container": {
+            "top": "3.5rem",
+            "position": "fixed",
+            "height": "calc(100% - 3.5rem)",
+        },
+        ".app": {
+            "height": "auto",
+            "width": "100vw",
+        }
+    })
+    app.style.addGlobals({
+        'transition': '150ms cubic-bezier(0.4, 0, 0.2, 1)'
+    })
+    app.style.addThemes('dark', {
+        'border-color': 'rgba(196, 196, 196, .257)',
+        'box-shadow': 'rgba(0, 0, 0, .5)',
+        "main-color": "rgb(244, 209, 180)",
+    })
+    app.style.addThemes('light', {
+        'border-color': 'rgba(50, 50, 50, .257)',
+        'box-shadow': 'rgba(50, 50, 50, .1)',
+        "main-color": "rgb(15, 198, 194)",
+    })
+
+    // add switch theme button
+    var moon = CTSVG.moon
+    var sun = CTSVG.sun
+    var mode = CTElement.create("div").append(
+    )
+    header_right.append(
+        mode
+    )
+    if (app.style.isDark()) {
+        mode.append(sun)
+    } else {
+        mode.append(moon)
+    }
+    mode.listener("click", () => {
+        app.style.setTheme(app.style.isDark() ? 'light' : 'dark')
+        if (!app.style.isDark()) {
+            mode.removeChild(sun)
+            mode.append(moon)
+        } else {
+            mode.removeChild(moon)
+            mode.append(sun)
+        }
+    })
+}
+
+function init() {
+    initStyle();
+
+    const header = CTElement.create("header")
+    header.append(header_left, header_right)
+
+    app.i18n.setLang('zh-cn')
+
+    app.body.append(CTElement.create("div").classes("container").append(
+        header,
+        CTElement.create("div").classes("app-container").append(
+            body
+        )
+    ));
+}
 
 async function main() {
-    // first check auth
+    init();
     if (!await checkAuth()) {
-        app.body.append(authPage)
-        return;
+        app.route("/auth/login")
     }
 }
 

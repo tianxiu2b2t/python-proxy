@@ -24,6 +24,10 @@ app.mount("/", ASSETS / "index.html")
 def _():
     return ASSETS / "index.html"
 
+@app.get("/{tag}/{item}")
+def _(tag, item):
+    return ASSETS / "index.html"
+
 app.add_router(auth.router)
 
 async def init():

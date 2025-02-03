@@ -26,6 +26,22 @@ class HTTP2FrameFlags(enum.IntEnum):
     PADDED = 0x8
     PRIORITY = 0x20
 
+class HTTP2Error(enum.IntEnum):
+    NO_ERROR = 0x0
+    PROTOCOL_ERROR = 0x1
+    INTERNAL_ERROR = 0x2
+    FLOW_CONTROL_ERROR = 0x3
+    SETTINGS_TIMEOUT = 0x4
+    STREAM_CLOSED = 0x5
+    FRAME_SIZE_ERROR = 0x6
+    REFUSED_STREAM = 0x7
+    CANCEL = 0x8
+    COMPRESSION_ERROR = 0x9
+    CONNECT_ERROR = 0xa
+    ENHANCE_YOUR_CALM = 0xb
+    INADEQUATE_SECURITY = 0xc
+    HTTP_1_1_REQUIRED = 0xd
+
 class HTTP2Frame:
     def __init__(
         self,
@@ -220,6 +236,19 @@ class HTTP2Connection:
     async def update_server_flow(self, stream_id: int, inc: int):
         await self.update_flow_window(self.server_flow, stream_id, inc)
 
+    async def send_settings(self, cfg: dict[int, int] = {}):
+        payload = b''
+        for key, value in cfg.items():
+            payload += key.to_bytes(2, "big")
+            payload += value.to_bytes(4, "big")
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.SETTINGS,
+                0,
+                0,
+                payload
+            )
+        )
 
     async def send_ack_settings(self):
         await self.send_frame(
@@ -271,6 +300,16 @@ class HTTP2Connection:
         stream_id = int.from_bytes(header[5:], 'big')
         payload = await self.client.readexactly(length)
         return HTTP2Frame(HTTP2FrameType(type), flags, stream_id, payload)
+
+    async def send_rst_stream(self, stream_id: int, error_code: HTTP2Error):
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.RST_STREAM,
+                0,
+                stream_id,
+                error_code.to_bytes(4, "big")
+            )
+        )
 
 class HTTP2DataStream:
     def __init__(

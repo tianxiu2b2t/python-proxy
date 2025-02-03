@@ -8,7 +8,7 @@ from typing import Optional
 import hpack
 
 from logger import logger
-from .http2 import HTTP2Frame, HTTP2FrameType, HTTP2Connection, HTTP2FrameFlags
+from .http2 import HTTP2Error, HTTP2Frame, HTTP2FrameType, HTTP2Connection, HTTP2FrameFlags
 from .common import statistics
 from ..protocols import Protocol
 from ..utils import Client, ClientStream, Header, get_status_code_name
@@ -22,7 +22,7 @@ class ProxyForward:
         self,
         url: str,
         force_https: bool = False,
-        url_http2: bool = False
+        http2: bool = False
     ):
         result = urlparse.urlparse(url)
         self.url = url
@@ -32,7 +32,7 @@ class ProxyForward:
         )
         self.scheme = result.scheme
         self.force_https = force_https
-        self.url_http2 = url_http2
+        self.http2 = http2
 
     @property
     def is_ssl(self):
@@ -87,10 +87,13 @@ class HTTP1Stream:
         self.status.req_http_version = "HTTP/2"
 
     async def _loop(self):
-        await asyncio.gather(
-            self._recv(),
-            self._send()
-        )
+        try:
+            await asyncio.gather(
+                self._recv(),
+                self._send()
+            )
+        except:
+            ...
 
     async def close(self):
         try:
@@ -222,12 +225,81 @@ class HTTP1Stream:
         self.status.req_host = host
         self.headers.set_result(headers)
 
+class HTTP2ClientConnection(HTTP2Connection):
+    def __init__(
+        self, 
+        client: Client
+    ):
+        super().__init__(client)
+        self.connection: Optional['HTTP2WrapperConnection'] = None
+        self.status: defaultdict[int, HTTPStatus] = defaultdict(HTTPStatus)
+
+    async def send(self):
+        await self.send_settings()
+
+    async def recv(self):
+        while not self.client.is_closing and (frame := await self.read_frame()):
+            if frame.type in self.__recv_mappings:
+                await self.__recv_mappings[frame.type](self, frame)
+            elif self.connection is not None:
+                await self.connection.send_frame(frame)
+
+    async def _recv_settings(self, frame: HTTP2Frame):
+        if frame.flags & HTTP2FrameFlags.ACK:
+            return
+        payload = frame.payload
+        for i in range(0, len(payload), 6):
+            settings_id = int.from_bytes(payload[i:i+2])
+            value = int.from_bytes(payload[i+2:i+6])
+            if settings_id not in self.settings._idx:
+                continue
+            setattr(self.settings, self.settings._idx[settings_id], value)
+        if self.connection is not None:
+            await self.connection.send_frame(frame)
+
+        await self.send_ack_settings()
+
+    async def _recv_headers(self, frame: HTTP2Frame):
+        if frame.stream_id in self.status:
+            status = self.status[frame.stream_id]
+            payload = frame.payload
+            if frame.padded:
+                payload = payload[1:-payload[0]]
+            if frame.priority:
+                payload = payload[5:]
+            header_list = self.decoder.decode(payload)
+            status_code = None
+            for k, v in header_list:
+                if k == ":status":
+                    status_code = int(v)
+            if status_code is not None: 
+                status.resp_time = time.perf_counter_ns()
+    
+                statistics.print_access_log(
+                    "Proxy",
+                    status.req_host,
+                    status.resp_time - status.req_time,
+                    status.req_method,
+                    status.req_raw_path,
+                    int(status_code),
+                    status.req_peername,
+                    status.req_user_agent,
+                    status.req_http_version
+                )
+        if self.connection is not None:
+            await self.connection.send_frame(frame)
+    __recv_mappings = {
+        HTTP2FrameType.SETTINGS: _recv_settings,
+        HTTP2FrameType.HEADERS: _recv_headers
+    }
+
 class HTTP2WrapperConnection(HTTP2Connection):
     def __init__(
         self,
         client: Client,
         hostname: str,
-        proxy: ProxyForward
+        proxy: ProxyForward,
+        connection: Optional[HTTP2ClientConnection],
     ):
         super().__init__(
             client
@@ -235,7 +307,10 @@ class HTTP2WrapperConnection(HTTP2Connection):
         self.hostname = hostname
         self.proxy = proxy
         self.http1_streams: dict[int, HTTP1Stream] = {}
-        self.connection = None
+        self.connection = connection
+
+        if self.connection is not None:
+            self.connection.connection = self
 
 
     async def recv(self):
@@ -269,12 +344,16 @@ class HTTP2WrapperConnection(HTTP2Connection):
         else:
             self.client_flow.update_stream_window(frame.stream_id, inc)
 
+        if self.connection is not None and frame.stream_id not in self.http1_streams:
+            await self.connection.send_frame(frame)
 
     async def _recv_rst_stream(self, frame: HTTP2Frame):
         stream_id = frame.stream_id
         if stream_id in self.http1_streams:
             asyncio.ensure_future(self.http1_streams[stream_id].close())
             del self.http1_streams[stream_id]
+        elif self.connection is not None:
+            await self.connection.send_frame(frame)
 
     async def _recv_headers(self, frame: HTTP2Frame):
         payload = frame.payload
@@ -298,7 +377,36 @@ class HTTP2WrapperConnection(HTTP2Connection):
         
         grpc = "application/grpc" in (headers.get_one("content-type") or "")
         if grpc and self.connection is None:
-            logger.warning("grpc connection not supported")
+            # send rst stream
+            await self.send_rst_stream(frame.stream_id, HTTP2Error.PROTOCOL_ERROR)
+            return
+        
+        if grpc and self.connection is not None:
+            status = self.connection.status[frame.stream_id]
+            status.req_peername = self.client.peername[0]
+            status.req_host = headers.get_one(":authority")
+            status.req_raw_path = headers.get_one(":path")
+            status.req_method = headers.get_one(":method")
+            status.req_http_version = "GRPC"
+            status.req_user_agent = headers.get_one("user-agent")
+            for k, v in {
+                "X-Forwarded-For": status.req_peername,
+                "X-Forwarded-Proto": "https" if self.client.is_tls else "http",
+                "X-Forwarded-Host": status.req_host,
+                "X-Real-IP": status.req_peername,
+            }.items():
+                header_list.append((k.lower(), v))
+            
+            status.req_time = time.perf_counter_ns()
+
+            await self.connection.send_frame(
+                HTTP2Frame(
+                    HTTP2FrameType.HEADERS,
+                    HTTP2FrameFlags.END_HEADERS,
+                    frame.stream_id,
+                    self.connection.encoder.encode(header_list)
+                )
+            )
             return
 
         if frame.stream_id not in self.http1_streams:
@@ -315,16 +423,6 @@ class HTTP2WrapperConnection(HTTP2Connection):
             self.http1_streams[frame.stream_id] = stream
         
         stream.feed_headers(header_list)
-            
-    async def init_http2_connection(self):
-        self.connection = await open_connection(
-            self.proxy.host,
-            self.proxy.port,
-            self.proxy.is_ssl
-        )
-        # send magic
-        self.connection.write(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-        await self.connection.drain()
 
     async def _recv_data(self, frame: HTTP2Frame):
         #await self.recver_flow.wait(frame.stream_id)
@@ -333,6 +431,13 @@ class HTTP2WrapperConnection(HTTP2Connection):
         payload = frame.payload
         if frame.padded:
             payload = payload[:-frame.payload[0]]
+
+        if frame.stream_id not in self.http1_streams and self.connection is not None:
+            await self.connection.send_frame(frame)
+            return
+
+        if frame.stream_id not in self.http1_streams:
+            return
         self.http1_streams[frame.stream_id].req_data.feed_data(payload)
         if frame.end_stream:
             self.http1_streams[frame.stream_id].req_data.feed_eof()
@@ -349,6 +454,16 @@ class HTTP2WrapperConnection(HTTP2Connection):
             )
         )
 
+    async def _recv_goway(self, frame: HTTP2Frame):
+        await self.close()
+
+    async def close(self):
+        for stream in self.http1_streams.values():
+            await stream.close()
+        self.http1_streams.clear()
+        await self.client.close()
+
+
     __recv_mappings = {
         HTTP2FrameType.SETTINGS: _recv_settings_frame,
         HTTP2FrameType.WINDOW_UPDATE: _recv_window_update,
@@ -356,7 +471,8 @@ class HTTP2WrapperConnection(HTTP2Connection):
         HTTP2FrameType.HEADERS: _recv_headers,
         HTTP2FrameType.DATA: _recv_data,
         HTTP2FrameType.CONTINUATION: _recv_headers,
-        HTTP2FrameType.PING: _recv_ping
+        HTTP2FrameType.PING: _recv_ping,
+        HTTP2FrameType.GOAWAY: _recv_goway
     }
 
 
@@ -368,22 +484,42 @@ async def process_http2_backend_proxy(
 ):
     # read magic
     await client.read(24)
+    conn = None
+    if proxy.http2:
+        conn = await open_connection(
+            proxy.host,
+            proxy.port,
+            proxy.is_ssl
+        )
+        conn.write(b'PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n')
+        await conn.drain()
+        conn = HTTP2ClientConnection(
+            conn
+        )
     connection = HTTP2WrapperConnection(
         client,
         hostname,
-        proxy
+        proxy,
+        conn
     )
-    if proxy.url_http2:
-        await connection.init_http2_connection()
     try:
-        await asyncio.gather(*(
+        coroutines = [
             connection.recv(),
             connection.send()
-        ))
-    except asyncio.exceptions.IncompleteReadError:
+        ]
+        if conn is not None:
+            coroutines.append(conn.recv())
+            coroutines.append(conn.send())
+        await asyncio.gather(*coroutines)
+    except (
+        asyncio.exceptions.IncompleteReadError,
+        GeneratorExit
+    ):
         ...
     except:
         logger.traceback()
+    finally:
+        await connection.close()
 
     
 
@@ -434,7 +570,7 @@ async def _forward_req(
 
         # add proxy header
         headers["X-Forwarded-For"] = status.req_peername
-        headers["X-Forwarded-Proto"] = "https"
+        headers["X-Forwarded-Proto"] = "https" if client.is_tls else "http"
         headers["X-Forwarded-Host"] = status.req_host
         headers["X-Real-IP"] = status.req_peername
         

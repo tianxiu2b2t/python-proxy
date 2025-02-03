@@ -41,7 +41,6 @@ export function initAuthAPI() {
                 'Authorization': token
             }
         }
-        console.log(url)
         return await oldFetch(url, options);
     }
     // xhr

@@ -42,16 +42,23 @@ export class CTElement {
         if (!(child instanceof CTElement)) {
             throw new Error('Child must be a CTElement');
         }
-        this.$base.removeChild(child.$base);
+        if (Array.from(this.$base.children).find(c => c == child.$base) != undefined) this.$base.removeChild(child.$base);
         this._children = this._children.filter(c => c.$base != child.$base);
         return this;
     }
     clear() {
-        console.log(this)
         this._children = [];
         while (this.$base.firstChild != null) {
             this.$base.removeChild(this.$base.firstChild);
         }
+        return this;
+    }
+    focus() {
+        this.$base.focus();
+        return this;
+    }
+    click() {
+        this.$base.click();
         return this;
     }
     classes(...classes) {
@@ -161,13 +168,13 @@ class CTStyle {
     loadDefaultTheme() {
         this.addThemes("dark", {
             "background": "rgb(24, 24, 24)",
-            "color": "rgba(0, 0, 0, 0.7)",
-            "dark-color": "rgba(255, 255, 255, 0.8)"
+            "dark-color": "rgba(0, 0, 0, 0.8)",
+            "color": "rgba(255, 255, 255, 0.8)"
         })
         this.addThemes("light", {
             "background": "rgb(248, 248, 247)",
-            "color": "rgba(255, 255, 255, 0.7)",
-            "dark-color": "rgba(0, 0, 0, 0.8)"
+            "dark-color": "rgba(255, 255, 255, 0.8)",
+            "color": "rgba(0, 0, 0, 0.8)"
         })
     }
     isDark() {
@@ -301,7 +308,7 @@ class CTApplication {
     constructor() {
         app = this;
         // find preloader
-        this.routers = [];
+        this.router = new CTRouterManager("/")
         this.elements = [];
         this.i18n = new CTI18N();
         this.logger = console;
@@ -313,8 +320,9 @@ class CTApplication {
         this.init();
     }
     init() {
-        this.routers.push(new CTRouter("/"))
         window.addEventListener('DOMContentLoaded', () => {
+            // handle router
+            
             let preloader = this.findElement('.preloader');
             if (preloader != null) {
                 let style = document.head.querySelector('style');
@@ -324,6 +332,7 @@ class CTApplication {
                     style?.remove();
                 }, { once: true });
             }
+            this.router.init();
         }, { once: true });
     }
     findElement(selector) {
@@ -334,33 +343,217 @@ class CTApplication {
     createElement(tag) {
         return new CTElement(tag);
     }
+
+    route(path) {
+        this.router.page(path);
+    }
+    addRoute(path, func) {
+        this.router.on(path, func);
+    }
+
     get body() {
         return this._body;
     }
 }
 class CTRouteEvent {
-
-}
-class CTRoute {
-    constructor(
-        path,
-        func
-    ) {
-        this.path = path; 
-        this.func = func;
+    constructor(manager, instance, before_route, current_route, params = {}) {
+        this.manager = manager
+        this.instance = instance;
+        this.current_route = current_route
+        this.before_route = before_route
+        this.params = params
     }
 }
 class CTRouter {
     constructor(
-        prefix = "/",
+        route_prefix = "/",
     ) {
-        this.routes = [];
-        this.prefix = prefix;
+        this._route_prefix = route_prefix.replace(/\/+$/, "")
+        this._routes = []
+        this._beforeHandlers = []
+        this._afterHandlers = []
+        this._current_path = null
     }
-    addRoute(path, func) {
-        this.routes.push(new CTRoute(path, func));
+    get _getCurrentPath() {
+        return window.location.pathname.replace(this._route_prefix, "") || "/"
     }
-    
+    on(path, handler) {
+        // path {xxx}
+        // replace to like python (?P<xxx>*.+)
+        var params = (path.match(/\{((\w+)|(\:(url)\:))\}/g) || []).map(x => x.replaceAll("{", "").replaceAll("}", "").replaceAll(":", ""))
+        var regexp_path = path.replace(/\{\:(url)\:\}/g, "(.*)").replace(/\{(\w+)\}/g, "([^/]*)")
+        var config = {
+            raw_path: path,
+            path: new RegExp(`^${regexp_path}$`),
+            params: params,
+            handler
+        }
+        this._routes.push(config)
+        // sort path length
+        this._routes.sort((a, b) => b.path.length - a.path.length)
+        return this
+    }
+    beforeHandler(handler) {
+        if (handler == null) this;
+        this._beforeHandlers.push(handler)
+        return this
+    }
+    afterHandler(handler) {
+        if (handler == null) this;
+        this._afterHandlers.push(handler)
+        return this
+    }
+
+}
+class CTRouterManager {
+    constructor(
+        route_prefix = "/",
+    ) {
+        this._routes = [
+            new CTRouter(route_prefix)
+        ]
+    }
+    init() {
+        window.addEventListener("popstate", () => {
+            this._popstateHandler()
+        })
+        window.addEventListener("click", (e) => {
+            if (e.target.tagName == "A") {
+                const href = e.target.getAttribute("href")
+                const url = new URL(href, window.location.origin);
+                if (url.origin != window.location.origin) return;
+                e.preventDefault()
+                if (url.pathname.startsWith(this._route_prefix)) {
+                    this._popstateHandler(url.pathname)
+                }
+            }
+        })
+        this._popstateHandler()
+    }
+    get _getCurrentPath() {
+        return window.location.pathname
+    }
+    _popstateHandler(path) {
+        path = path || this._getCurrentPath
+        const matchRoutes = []
+        for (const router of this._routes) {
+            if (path.startsWith(router._route_prefix)) {
+                matchRoutes.push(router)
+            }
+        }
+        if (!matchRoutes.length) matchRoutes.push(this._routes[0])
+        const handlers = {
+            before: [],
+            route: [],
+            after: []
+        };
+        var router = null;
+        for (const r of matchRoutes) {
+            let new_path = path.replace(r._route_prefix, "") || "/"
+            var match_routes = r._routes.filter(x => x.path.test(new_path))
+            if (match_routes.length) {
+                router = r
+                break
+            }
+        }
+        router = router || matchRoutes[0]
+        const old_path = router._current_path
+        const new_path = path.replace(router._route_prefix, "") || "/"
+        if (new_path == router._current_path) return;
+        router._current_path = new_path
+        window.history.pushState(null, '', router._route_prefix + new_path)
+        for (const handler of router._beforeHandlers) {
+            handlers.before.push(handler)
+        }
+
+        // route
+        for (const route of router._routes.filter(x => x.path.test(new_path))) {
+            handlers.route.push(route)
+        }
+        // after
+        for (const handler of router._afterHandlers) {
+            handlers.after.push(handler)
+        }
+        this._run(handlers, {
+            manager: this,
+            router,
+            old_path: old_path,
+            new_path: new_path,
+        })
+    }
+    _run(handlers = {
+        before: [],
+        route: [],
+        after: []
+    }, options = {
+        manager: this,
+        router: null,
+        old_path: null,
+        new_path: null,
+    }) {
+        var preHandle = (
+            preHandlers
+        ) => {
+            preHandlers.forEach(handler => {
+                try {
+                    handler(new CTRouteEvent(
+                        options.manager,
+                        options.router,
+                        options.old_path,
+                        options.new_path,
+                    ))
+                } catch (e) {
+                    console.error(e)
+                }
+            })
+        }
+        preHandle(handlers.before)
+        try {
+            handlers.route.forEach(route => {
+                var params = route.path.exec(options.new_path).slice(1).reduce((acc, cur, i) => {
+                    acc[route.params[i]] = cur
+                    return acc
+                }, {})
+                var handler = route ? route.handler : null
+                if (handler) {
+                    try {
+                        handler(new CTRouteEvent(
+                            options.manager,
+                            options.router,
+                            options.old_path,
+                            options.new_path,
+                            params
+                        ))
+                    } catch (e) {
+                        console.log(e)
+                    }
+                }
+            })
+        } catch (e) {
+            console.error(e)
+
+        }
+        preHandle(handlers.after)
+        return true
+    }
+    on(path, handler) {
+        this._routes[0].on(path, handler)
+        return this
+    }
+    beforeHandler(handler) {
+        this._routes[0].beforeHandler(handler)
+        return this
+    }
+    afterHandler(handler) {
+        this._routes[0].afterHandler(handler)
+        return this
+    }
+    page(path) {
+        this._popstateHandler(
+            this._routes[0]._route_prefix + path
+        )
+        return this
+    }
 }
 class CTI18NChangeEvent extends Event {
     constructor() {

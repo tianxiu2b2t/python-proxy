@@ -640,6 +640,9 @@ class Response:
                 headers["Content-Type"] = self.content_type
         else:
             headers["Transfer-Encoding"] = "chunked"
+        
+        if length is not None and self.status == 200 and length == 0:
+            self.status = 204
     
         byte_header = f'{request.http_version} {self.status} {get_status_code_name(self.status)}\r\n'
         self.add_content_type_encoding(headers)
@@ -1062,6 +1065,15 @@ class HTTP2WrapperConnection(HTTP2Connection):
             )
         )
 
+    async def _recv_goway(self, frame: HTTP2Frame):
+        await self.close()
+
+    async def close(self):
+        for stream in self.http1_streams.values():
+            await stream.close()
+        self.http1_streams.clear()
+        await self.client.close()
+
     __recv_mappings = {
         HTTP2FrameType.SETTINGS: _recv_settings_frame,
         HTTP2FrameType.WINDOW_UPDATE: _recv_window_update,
@@ -1069,7 +1081,8 @@ class HTTP2WrapperConnection(HTTP2Connection):
         HTTP2FrameType.HEADERS: _recv_headers,
         HTTP2FrameType.DATA: _recv_data,
         HTTP2FrameType.CONTINUATION: _recv_headers,
-        HTTP2FrameType.PING: _recv_ping
+        HTTP2FrameType.PING: _recv_ping,
+        HTTP2FrameType.GOAWAY: _recv_goway,
     }
   
         
