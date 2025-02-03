@@ -59,6 +59,18 @@ class Client:
             ret = data
         return ret + await self._reader.readuntil(separator)
 
+    async def readexactly(self, n: int) -> bytes:
+        buffer = b''
+        while self._buffers:
+            data = self._buffers.pop()
+            buffer += data
+            if len(buffer) >= n:
+                ret, body = buffer[:n], buffer[n:]
+                if body:
+                    self._buffers.appendleft(body)
+                return ret
+        return buffer + await self._reader.readexactly(n)
+
     
     def write(self, data: bytes):
         self._writer.write(data)
@@ -158,7 +170,7 @@ class Header(dict[str, list[str]]):
     def get(self, key: str, default=None):
         return super().get(self._get_key(key), default or [])
     
-    def get_one(self, key: str, default=None):
+    def get_one(self, key: str, default: Optional[Any] = None) -> Any:
         ret = self.get(key, default)
         if not ret:
             return default
@@ -211,6 +223,9 @@ class Cookie:
             (f' secure;' if self.secure else '') + \
             (f' httponly;' if self.http_only else '') + \
             (f' samesite={self.same_site};' if self.same_site else '')
+
+def get_status_code_name(status_code: int):
+    return STATUS_CODES.get(status_code, "Unknown")
 
 
 STATUS_CODES: dict[int, str] = {
@@ -271,9 +286,6 @@ def find_origin(sockname: tuple[str, int]):
 
 def get_origin_cfg(sockname: tuple[str, int]):
     return forwards_config.get(sockname, None)
-
-def get_status_code_name(status_code: int):
-    return STATUS_CODES.get(status_code, "Unknown")
     
 class ClientStream:
     def __init__(
@@ -334,6 +346,15 @@ class ClientStream:
             raise EOFError
         return ret + await self._client.readuntil(separator)
     
+    async def readexactly(self, n: int):
+        buffer = b''
+        while len(buffer) < n:
+            buf = await self.read(n - len(buffer))
+            if not buf:  # EOF
+                raise asyncio.IncompleteReadError(buffer, n)
+            buffer += buf
+        return buffer
+
     async def read_write(self, n: int):
         if self._client is not None:
             raise RuntimeError("read_write can only be called on fake client")

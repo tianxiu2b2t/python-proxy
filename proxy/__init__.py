@@ -30,6 +30,7 @@ class ProxyConfigBackendProxy:
     ports: list[int]
     url: str
     force_https: bool = False
+    url_http2: bool = False
     certificate: Optional[ProxyConfigBackendProxyCertificate | ProxyConfigBackendProxyDNSCertificate] = None
 
 class ProxyConfig:
@@ -59,6 +60,7 @@ class ProxyConfig:
             ports = proxy['ports']
             url = proxy['url']
             force_https = proxy.get('force_https', False)
+            url_http2 = proxy.get('url_http2', False)
             certificate = proxy.get('certificate')
             cert = None
             if certificate is not None:
@@ -82,6 +84,7 @@ class ProxyConfig:
                     ports,
                     url,
                     force_https,
+                    url_http2,
                     cert
                 )
             )
@@ -137,5 +140,6 @@ async def start_proxy(
         web.create_proxy(
             host,
             proxy.url,
-            proxy.force_https
+            proxy.force_https,
+            proxy.url_http2
         )

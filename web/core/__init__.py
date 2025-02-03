@@ -18,13 +18,15 @@ port_applications: dict[int, 'Application'] = {}
 def create_proxy(
     host: str,
     url: str,
-    force_https: bool = False
+    force_https: bool = False,
+    url_http2: bool = False
 ):
     if host in proxies:
         raise ValueError(f"proxy {host} already exists")
     proxies[host] = ProxyForward(
         url,
-        force_https
+        force_https,
+        url_http2
     )
 
 def create_application(

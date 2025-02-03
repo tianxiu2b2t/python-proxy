@@ -78,6 +78,35 @@ class Queue[T]:
             fut = self._waiters.popleft()
             fut.set_result(True)
 
+class Lock:
+    def __init__(
+        self
+    ):
+        self._locked = False
+        self._waiters: deque[asyncio.Future] = deque()
+
+    async def wait(self):
+        if not self._locked:
+            return
+        fut = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        try:
+            await fut
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if fut in self._waiters:
+                self._waiters.remove(fut)
+
+    def acquire(self):
+        self._locked = True
+
+    def release(self):
+        self._locked = False
+        while self._waiters:
+            fut = self._waiters.popleft()
+            fut.set_result(True)
+                
 
 class JWT:
     defaultHeaders = {

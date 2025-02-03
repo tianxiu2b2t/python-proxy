@@ -1,12 +1,13 @@
 import asyncio
-from collections import defaultdict
+from collections import defaultdict, deque
 import enum
+
 import hpack
 
-from logger import logger
-from ..utils import Client, Header
+import utils
+from ..utils import Client
 
-class HTTP2FrameType(enum.Enum):
+class HTTP2FrameType(enum.IntEnum):
     DATA = 0x0
     HEADERS = 0x1
     PRIORITY = 0x2
@@ -18,421 +19,280 @@ class HTTP2FrameType(enum.Enum):
     WINDOW_UPDATE = 0x8
     CONTINUATION = 0x9
 
-    @staticmethod
-    def from_int(value: int):
-        return HTTP2FrameType(value)
-
-class HTTP2HeaderFrame:
-    def __init__(
-        self,
-        type: int = 0,
-        flags: int = 0,
-        length: int = 0,
-        stream_id: int = 0,
-    ):
-        self.type = HTTP2FrameType.from_int(type)
-        self.flags = flags
-        self.length = length
-        self.stream_id = stream_id
-
-
-    # flags bit
-    # 0x1 END_STREAM
-    # 0x2 ACK
-    # 0x4 END_HEADERS
-    # 0x8 PADDED
-    # 0x20 PRIORITY
-
-    @property
-    def end_stream(self) -> bool:
-        return self.flags & 0x1 == 0x1
-    
-    @property
-    def ack(self) -> bool:
-        return self.flags & 0x1 == 0x1
-    
-    @property
-    def end_headers(self) -> bool:
-        return self.flags & 0x4 == 0x4
-    
-    @property
-    def padded(self) -> bool:
-        return self.flags & 0x8 == 0x8
-    
-    @property
-    def priority(self) -> bool:
-        return self.flags & 0x20 == 0x20
-    
-    @end_stream.setter
-    def end_stream(self, value: bool):
-        if self.type not in (
-            HTTP2FrameType.DATA,
-            HTTP2FrameType.HEADERS,
-            HTTP2FrameType.PUSH_PROMISE,
-        ):
-            raise ValueError('END_STREAM flag can only be set for DATA, HEADERS, PUSH_PROMISE frames')
-        if value:
-            self.flags |= 0x1
-        else:
-            self.flags &= ~0x1
-
-
-    @ack.setter
-    def ack(self, value: bool):
-        if self.type != HTTP2FrameType.PING:
-            raise ValueError('ACK flag can only be set for PING frames')
-        if value:
-            self.flags |= 0x1
-        else:
-            self.flags &= ~0x1
-
-    @end_headers.setter
-    def end_headers(self, value: bool):
-        if self.type != HTTP2FrameType.HEADERS:
-            raise ValueError('END_HEADERS flag can only be set for HEADERS frames')
-        if value:
-            self.flags |= 0x4
-        else:
-            self.flags &= ~0x4
-
-    @padded.setter
-    def padded(self, value: bool):
-        if self.type not in (
-            HTTP2FrameType.DATA,
-            HTTP2FrameType.HEADERS,
-            HTTP2FrameType.PUSH_PROMISE,
-        ):
-            raise ValueError('PADDED flag can only be set for DATA, HEADERS, PUSH_PROMISE frames')
-        if value:
-            self.flags |= 0x8
-        else:
-            self.flags &= ~0x8
-
-    @priority.setter
-    def priority(self, value: bool):
-        if self.type != HTTP2FrameType.HEADERS:
-            raise ValueError('PRIORITY flag can only be set for HEADERS frames')
-        if value:
-            self.flags |= 0x20
-        else:
-            self.flags &= ~0x20
-    
-    def __repr__(self):
-        return f'HTTP2HeaderFrame(type={self.type}, flags={self.flags}, length={self.length}, stream_id={self.stream_id})'
-    
-    def to_bytes(self):
-        return self.length.to_bytes(3, 'big') + self.type.value.to_bytes(1, 'big') + self.flags.to_bytes(1, 'big') + self.stream_id.to_bytes(4, 'big')
-
-class HTTP2Frame:
-    def __init__(
-        self,
-        header_frame: HTTP2HeaderFrame,
-        stream_id: int,
-        payload: bytes
-    ):
-        self.header_frame = header_frame
-        self.stream_id = stream_id
-        padding = 0
-        if header_frame.padded:
-            padding = payload[0]
-            payload = payload[1:]
-        
-        if header_frame.type == HTTP2FrameType.HEADERS and header_frame.priority:
-            payload = payload[5:]
-
-        self.payload = payload[:len(payload) - padding]
-
-
-    def __repr__(self):
-        return f'HTTP2Frame(type={self.header_frame.type}, stream_id={self.stream_id}, payload={self.payload})'
-
-class HTTP2Settings:
-    settings_header_table_size = 4096
-    settings_enable_push = False
-    settings_max_concurrent_streams = 100000
-    settings_initial_window_size = 65535
-    settings_max_frame_size = 16384
-    settings_max_header_list_size = 262144
-
-    _idx = {
-        1: "settings_header_table_size",
-        2: "settings_enable_push",
-        3: "settings_max_concurrent_streams",
-        4: "settings_initial_window_size",
-        5: "settings_max_frame_size",
-        6: "settings_max_header_list_size"
-    }
-
-RESP_HEADER_BLOCK_LENGTH = 512
-
-class HTTP2FlagsType(enum.IntEnum):
+class HTTP2FrameFlags(enum.IntEnum):
     END_STREAM = 0x1
     ACK = 0x1
     END_HEADERS = 0x4
     PADDED = 0x8
     PRIORITY = 0x20
 
-class HTTP2FrameStream:
+class HTTP2Frame:
     def __init__(
         self,
-        stream: 'HTTP2Stream',
+        type: HTTP2FrameType,
+        flags: int,
         stream_id: int,
-    ):
-        self.stream = stream
+        payload: bytes
+    ) -> None:
+        self.type = type
+        self.flags = flags
         self.stream_id = stream_id
-        self.hpack_decoder = stream.hpack_decoder
-        self.hpack_encoder = stream.hpack_encoder
-        self.headers: Header = Header()
-        self.method: str = ""
-        self.path: str = ""
-        self.host: str = ""
-        self.reader: asyncio.StreamReader = asyncio.StreamReader()
-        self.buffer: bytes = b''
-        self.end_data_stream = False
-        self.req_header = False
-        self._waiter_headers = None
-        self.stream_size = stream.settings.settings_initial_window_size
+        self.length = len(payload)
+        self.payload = payload
 
-    def feed_frame(self, frame: HTTP2Frame):
-        if frame.header_frame.type == HTTP2FrameType.HEADERS:
-            headers: list[tuple[str, str]] = self.hpack_decoder.decode(frame.payload)
-            for k, v in headers:
-                if k.startswith(':'):
-                    k = k[1:]
-                    if k == 'method':
-                        self.method = v
-                    elif k == 'path':
-                        self.path = v
-                    elif k == 'authority':
-                        self.host = v
-                        self.headers['host'] = v
-                    continue
-                self.headers.add(k, v)
-            self.req_header = True
-            if self._waiter_headers:
-                self._waiter_headers.set_result(True)
-        if not self.req_header:
-            logger.warning('Request header not received')
-            return
-        if frame.header_frame.type == HTTP2FrameType.DATA:
-            self.reader.feed_data(frame.payload)
-            if frame.header_frame.end_stream:
-                self.reader.feed_eof()
+    def to_bytes(self):
+        return self.length.to_bytes(3, 'big') + self.type.to_bytes(1, 'big') + self.flags.to_bytes(1, 'big') + self.stream_id.to_bytes(4, 'big') + self.payload
+    
+    @property
+    def end_stream(self):
+        return self.flags & HTTP2FrameFlags.END_STREAM == HTTP2FrameFlags.END_STREAM
 
     @property
-    def wait_headers(self):
-        self._waiter_headers = asyncio.get_running_loop().create_future()
-        return self._waiter_headers
+    def end_headers(self):
+        return self.flags & HTTP2FrameFlags.END_HEADERS == HTTP2FrameFlags.END_HEADERS
 
-    async def send_response_header(self, status_code: int, headers: Header, end_stream: bool = False):
-        header_list = [
-            (':status', str(status_code))
-        ]
-        for k, v in headers.items():
-            # ignore content-length
-            if k.lower() in ('content-length', 'transfer-encoding'):
-                continue
-            for val in v:
-                header_list.append((k.lower(), val))
-            
+    @property
+    def padded(self):
+        return self.flags & HTTP2FrameFlags.PADDED == HTTP2FrameFlags.PADDED
 
-        await self.stream._send_settings_ack(0)
-        # to lower
-        header_block = self.hpack_encoder.encode(header_list)
-        flags = HTTP2FlagsType.END_HEADERS.value
-        if end_stream:
-            flags |= HTTP2FlagsType.END_STREAM.value
-        header_frame = HTTP2HeaderFrame(
-            type=HTTP2FrameType.HEADERS.value,
-            flags=flags,
-            stream_id=self.stream_id,
-            length=len(header_block),
-        )
-        await self._send_frame(HTTP2Frame(
-            header_frame,
-            self.stream_id,
-            header_block
-        ))
-
-    async def _send_frame(self, frame: HTTP2Frame):
-        self.stream.stream.write(frame.header_frame.to_bytes() + frame.payload)
-
-
-    async def send_data(self, data: bytes):
-        self.buffer += data
-        if len(data) == 0:
-            self.end_data_stream = True
-        if len(self.buffer) > 16384:
-            await self._drain_data()
-        while self.end_data_stream and len(self.buffer) > 0:
-            await self._drain_data()
-
-    async def drain(self):
-        await self._drain_data()
-
-    async def _drain_data(self):
-        data = self.buffer[:16384]
-        self.buffer = self.buffer[16384:]
-        flags = HTTP2FlagsType.END_STREAM.value if len(self.buffer) == 0 else 0
-        data_frame = HTTP2HeaderFrame(
-            type=HTTP2FrameType.DATA.value,
-            flags=flags,
-            stream_id=self.stream_id,
-            length=len(data),
-        )
-        await self._send_frame(HTTP2Frame(
-            data_frame,
-            self.stream_id,
-            data
-        ))
+    @property
+    def priority(self):
+        return self.flags & HTTP2FrameFlags.PRIORITY == HTTP2FrameFlags.PRIORITY
     
+    @property
+    def ack(self):
+        return self.flags & HTTP2FrameFlags.ACK == HTTP2FrameFlags.ACK
+    
+    def __repr__(self):
+        return f'<HTTP2Frame type={self.type.name} flags={self.flags} stream_id={self.stream_id} length={self.length} payload={self.payload}>'
 
-class HTTP2RstStream:
-    def __init__(self, stream_id: int, error_code: int):
-        self.stream_id = stream_id
-        self.error_code = error_code
+MAYBE_UPDATE_SIZE = 65535
+UPDATE_MAX_SIZE = 16777216
+MAX_BUFFER = 1024 * 1024 * 4
 
-    def __repr__(self) -> str:
-        return f'HTTP2RstStream(stream_id={self.stream_id}, error_code={self.error_code})'
-
-class HTTP2GoAwayStream:
-    def __init__(self, last_stream_id: int, error_code: int, debug_data: bytes):
-        self.last_stream_id = last_stream_id
-        self.error_code = error_code
-        self.debug_data = debug_data
-
-    def __repr__(self) -> str:
-        return f'HTTP2GoAwayStream(last_stream_id={self.last_stream_id}, error_code={self.error_code}, debug_data={self.debug_data})'
-
-MAX_CONNECTION_WINDOW_SIZE = 2 ** 31 - 1
-STREAM_SIZE = 2 ** 24 - 1
-
-class HTTP2Stream:
+class HTTP2FlowControl:
     def __init__(
         self,
-        stream: Client
     ):
-        self.stream = stream
-        self.hpack_decoder = hpack.Decoder()
-        self.hpack_encoder = hpack.Encoder()
-        self.headers = []
-        self.body = b''
-        self.settings = HTTP2Settings()
-        self.connection_window_size = self.settings.settings_initial_window_size
+        self.initial_window_size = 65535
+        self.streams: defaultdict[int, int] = defaultdict(lambda: self.initial_window_size)
+        self.window_size = self.initial_window_size
+        self._waiters: defaultdict[int, deque[asyncio.Future]] = defaultdict(deque)
 
-    async def __aiter__(self):
-        streams: dict[int, HTTP2FrameStream] = {}
-        while not self.stream.is_closing:
-            try:
-                frame_header = await self.read_header_frame()
-            except:
-                break 
-            payload = await self.stream.read(frame_header.length)
-            if frame_header.type == HTTP2FrameType.GOAWAY:
-                logger.debug('goaway', payload)
-                yield HTTP2GoAwayStream(
-                    int.from_bytes(payload[:4], 'big'),
-                    int.from_bytes(payload[4:8], 'big'),
-                    payload[8:]
-                )
-                break
-            if frame_header.type == HTTP2FrameType.PING:
-                await self._send_pong(frame_header.stream_id, payload)
-                continue
-            if frame_header.type == HTTP2FrameType.SETTINGS:
-                frame = HTTP2Frame(frame_header, frame_header.stream_id, payload)
-                self._process_settings_frame(frame)
-                # ack settings
-                await self._send_settings_ack(frame_header.stream_id)
-                continue
-            if frame_header.type == HTTP2FrameType.WINDOW_UPDATE:
-                self.connection_window_size += int.from_bytes(payload, 'big')
-                await self._send_window_update(frame_header.stream_id, MAX_CONNECTION_WINDOW_SIZE - self.connection_window_size)
-                continue
-            if frame_header.type == HTTP2FrameType.RST_STREAM:
-                yield HTTP2RstStream(frame_header.stream_id, int.from_bytes(payload, 'big'))
-                continue
-            if frame_header.type == HTTP2FrameType.HEADERS:
-                stream = HTTP2FrameStream(
-                    self,
-                    frame_header.stream_id
-                )
-                streams[frame_header.stream_id] = stream
-                stream.feed_frame(HTTP2Frame(
-                    frame_header,
-                    frame_header.stream_id,
-                    payload
-                ))
-                yield stream
-            if frame_header.type == HTTP2FrameType.DATA and frame_header.stream_id in streams:
-                stream = streams[frame_header.stream_id]
-                self.connection_window_size -= frame_header.length
-                stream.stream_size -= frame_header.length
-                stream.feed_frame(HTTP2Frame(
-                    frame_header,
-                    frame_header.stream_id,
-                    payload
-                ))
-                if stream.stream_size < STREAM_SIZE:
-                    diff = STREAM_SIZE - stream.stream_size
-                    await self._send_window_update(frame_header.stream_id, diff)
-                    stream.stream_size += diff
+    def update_connection_window(self, delta: int):
+        self.window_size += delta
+        
+    def update_stream_window(self, stream_id: int, delta: int):
+        self.streams[stream_id] += delta
+        while self._waiters[stream_id] and self.get_can_send(stream_id) != 0:
+            fut = self._waiters[stream_id].popleft()
+            fut.set_result(True)
 
-    async def _send_pong(self, stream_id: int, payload: bytes):
-        header_frame = HTTP2HeaderFrame(
-            type=HTTP2FrameType.PING.value,
-            flags=0,
-            length=8,
-            stream_id=stream_id,
-        )
-        header_frame.ack = True
-        pong_frame = HTTP2Frame(
-            header_frame=header_frame,
-            stream_id=stream_id,
-            payload=payload,
-        )
-        self.stream.write(header_frame.to_bytes() + pong_frame.payload)
-        await self.stream.drain()
-
-    async def read_header_frame(self):
-        frame_header = await self.stream.read(9)
-        length = int.from_bytes(frame_header[:3], 'big')
-        type = frame_header[3]
-        flags = frame_header[4]
-        stream_id = int.from_bytes(frame_header[5:], 'big')
-        return HTTP2HeaderFrame(
-            type=type,
-            flags=flags,
-            length=length,
-            stream_id=stream_id,
-        )
+    def get_can_send(self, stream_id: int):
+        return min(self.window_size, self.streams[stream_id])
     
-    def _process_settings_frame(self, frame: HTTP2Frame):
-        for i in range(0, len(frame.payload), 6):
-            setting_id = int.from_bytes(frame.payload[i:i+2], 'big')
-            setting_value = int.from_bytes(frame.payload[i+2:i+6], 'big')
-            setattr(self.settings, HTTP2Settings._idx[setting_id], setting_value)
-            
-    async def _send_window_update(self, stream_id: int, size: int):
-        header_frame = HTTP2HeaderFrame(
-            type=HTTP2FrameType.WINDOW_UPDATE.value,
-            flags=0,
-            length=4,
-            stream_id=stream_id,
-        )
-        window_update_frame = HTTP2Frame(
-            header_frame=header_frame,
-            stream_id=stream_id,
-            payload=size.to_bytes(4, 'big'),
-        )
-        self.stream.write(header_frame.to_bytes() + window_update_frame.payload)
-        await self.stream.drain()
+    def send(self, stream_id: int, size: int):
+        self.window_size -= size
+        self.streams[stream_id] -= size
 
-    async def _send_settings_ack(self, stream_id: int):
-        header_frame = HTTP2HeaderFrame(
-            type=HTTP2FrameType.SETTINGS.value,
-            flags=HTTP2FlagsType.ACK.value,
-            length=0,
-            stream_id=stream_id,
+    def maybe_update_window_size(self):
+        return self.window_size < MAYBE_UPDATE_SIZE
+        
+    
+    def maybe_update_stream_window_size(self, stream_id: int):
+        return self.streams[stream_id] < MAYBE_UPDATE_SIZE
+    
+
+    async def wait(self, stream_id: int):
+        if self.get_can_send(stream_id) != 0:
+            return
+        fut = asyncio.Future()
+        self._waiters[stream_id].append(fut)
+        try:
+            await fut
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if fut in self._waiters[stream_id]:
+                self._waiters[stream_id].remove(fut)
+
+class HTTP2Settings:
+    header_table_size = 4096
+    enable_push = False
+    max_concurrent_streams = 100000
+    initial_window_size = 65535
+    max_frame_size = 16384
+    max_header_list_size = 262144
+
+    _idx = {
+        1: "header_table_size",
+        2: "enable_push",
+        3: "max_concurrent_streams",
+        4: "initial_window_size",
+        5: "max_frame_size",
+        6: "max_header_list_size"
+    }
+
+class HTTP2Connection:
+    def __init__(
+        self,
+        client: Client
+    ):
+        self.client = client
+        self.settings = HTTP2Settings()
+        self.client_flow = HTTP2FlowControl()
+        self.server_flow = HTTP2FlowControl()
+        self.decoder = hpack.Decoder()
+        self.encoder = hpack.Encoder()
+
+        self.data_streams: defaultdict[int, HTTP2DataStream] = defaultdict(HTTP2DataStream)
+        self.data_lock = utils.Lock()
+        self.header_payloads: defaultdict[int, bytes] = defaultdict(bytes)
+
+        self.data_lock.acquire()
+
+    async def send(self):
+        while not self.client.is_closing:
+            await self.data_lock.wait()
+            self.data_lock.acquire()
+            clear = []
+            for stream_id, reader in self.data_streams.items():
+                while reader.can_read:
+                    await self.client_flow.wait(stream_id)
+                    flow_size = self.client_flow.get_can_send(stream_id)
+                    data = reader.read(min(self.settings.max_frame_size, flow_size))
+                    self.client_flow.window_size -= len(data)
+                    self.client_flow.streams[stream_id] -= len(data)
+                    flags = 0
+                    if reader.at_eof:
+                        flags |= HTTP2FrameFlags.END_STREAM
+                        clear.append(stream_id)
+                    await self.send_frame(
+                        HTTP2Frame(
+                            HTTP2FrameType.DATA,
+                            flags,
+                            stream_id,
+                            data
+                        )
+                    )
+            for stream_id in clear:
+                del self.data_streams[stream_id]
+
+    async def send_frame(self, *frames: HTTP2Frame):
+        buffer = b''
+        for frame in frames:
+            buffer += frame.to_bytes()
+        self.client.write(
+            buffer
         )
-        self.stream.write(header_frame.to_bytes())
+        await self.client.drain()
+
+    async def update_flow_window(self, flow: HTTP2FlowControl, stream_id: int, inc: int):
+        frames = []
+        payload = inc.to_bytes(4, "big")
+        if flow.maybe_update_window_size():
+            frames.append(
+                HTTP2Frame(
+                    HTTP2FrameType.WINDOW_UPDATE,
+                    0,
+                    0,
+                    payload
+                )
+            )
+            flow.update_connection_window(inc)
+
+        if flow.maybe_update_stream_window_size(stream_id):
+            frames.append(
+                HTTP2Frame(
+                    HTTP2FrameType.WINDOW_UPDATE,
+                    0,
+                    stream_id,
+                    payload
+                )
+            )
+            flow.update_stream_window(stream_id, inc)
+
+        await self.send_frame(*frames)
+
+    async def update_client_flow(self, stream_id: int, inc: int):
+        await self.update_flow_window(self.client_flow, stream_id, inc)
+
+    async def update_server_flow(self, stream_id: int, inc: int):
+        await self.update_flow_window(self.server_flow, stream_id, inc)
+
+
+    async def send_ack_settings(self):
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.SETTINGS,
+                HTTP2FrameFlags.ACK,
+                0,
+                b""
+            )
+        )
+
+    async def send_headers(self, header_list: list[tuple[str, str]], stream_id: int, end_stream: bool = False):
+        payload = self.encoder.encode(header_list)
+        flags = HTTP2FrameFlags.END_HEADERS
+        if end_stream:
+            flags |= HTTP2FrameFlags.END_STREAM
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.HEADERS,
+                flags,
+                stream_id,
+                payload
+            )
+        )
+
+    def send_data(self, data: bytes, stream_id: int):
+        self.data_streams[stream_id].feed_data(data)
+
+        for stream in self.data_streams.values():
+            if stream.can_read:
+                self.data_lock.release()
+                break
+
+    async def send_window_update(self, stream_id: int, inc: int):
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.WINDOW_UPDATE,
+                0,
+                stream_id,
+                inc.to_bytes(4, "big")
+            )
+        )
+
+    async def read_frame(self):
+        header = await self.client.readexactly(9)
+        length = int.from_bytes(header[:3], 'big')
+        type = header[3]
+        flags = header[4]
+        stream_id = int.from_bytes(header[5:], 'big')
+        payload = await self.client.readexactly(length)
+        return HTTP2Frame(HTTP2FrameType(type), flags, stream_id, payload)
+
+class HTTP2DataStream:
+    def __init__(
+        self
+    ):
+        self.buffer = b''
+        self.end_stream = False
+    
+    def feed_data(self, data: bytes):
+        self.buffer += data
+        if not data:
+            self.end_stream = True
+
+    @property
+    def can_read(self):
+        return len(self.buffer) > 16384 or (self.end_stream and len(self.buffer) > 0)
+    
+    def read(self, size: int = MAX_BUFFER):
+        buf, data = self.buffer[:size], self.buffer[size:]
+        self.buffer = data
+        return buf
+    
+    @property
+    def at_eof(self):
+        return not self.buffer and self.end_stream
