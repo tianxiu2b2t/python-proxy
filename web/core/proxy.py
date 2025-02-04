@@ -342,8 +342,8 @@ class HTTP2WrapperConnection(HTTP2Connection):
         if frame.stream_id == 0:
             self.client_flow.update_connection_window(inc)
 
-            await self.send_window_update(frame.stream_id, inc)
-            self.server_flow.update_connection_window(inc)
+            #await self.send_window_update(frame.stream_id, inc)
+            #self.server_flow.update_connection_window(inc)
         else:
             self.client_flow.update_stream_window(frame.stream_id, inc)
 
