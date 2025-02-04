@@ -500,7 +500,6 @@ class HTTP2WrapperConnection(HTTP2Connection):
             frames.extend(self.http2_frames)
             self.http2_frames.clear()
         frames.append(frame)
-        print(frames)
         await self.connection.send_frame(*frames)
 
     __recv_mappings = {
