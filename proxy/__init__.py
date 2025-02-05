@@ -134,6 +134,7 @@ async def start_proxy(
         await web.start_server(
             port,
             cert,
+            True
         )
     for host in proxy.hosts:
         web.create_proxy(

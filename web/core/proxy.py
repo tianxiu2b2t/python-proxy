@@ -238,6 +238,10 @@ class HTTP2ClientConnection(HTTP2Connection):
     def start_loop(self):
         self._task = asyncio.get_running_loop().create_task(self.recv())
 
+    def __del__(self):
+        if self._task is not None:
+            self._task.cancel()
+
     async def send(self):
         await self.send_settings()
 
@@ -470,6 +474,8 @@ class HTTP2WrapperConnection(HTTP2Connection):
         for stream in self.http1_streams.values():
             await stream.close()
         self.http1_streams.clear()
+        if self.connection is not None:
+            await self.connection.client.close()
         await self.client.close()
 
     async def init_http2_connection(self):
@@ -522,7 +528,6 @@ async def process_http2_backend_proxy(
 ):
     # read magic
     await client.read(24)
-    conn = None
     connection = HTTP2WrapperConnection(
         client,
         hostname,

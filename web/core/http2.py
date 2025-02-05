@@ -85,6 +85,7 @@ class HTTP2Frame:
 MAYBE_UPDATE_SIZE = 65535
 UPDATE_MAX_SIZE = 16777216
 MAX_BUFFER = 1024 * 1024 * 4
+MAX_FRAME_SIZE = 16777215
 
 class HTTP2FlowControl:
     def __init__(
@@ -135,9 +136,9 @@ class HTTP2FlowControl:
 class HTTP2Settings:
     header_table_size = 4096
     enable_push = False
-    max_concurrent_streams = 100000
+    max_concurrent_streams = 256
     initial_window_size = 65535
-    max_frame_size = 16384
+    max_frame_size = 1677215
     max_header_list_size = 262144
 
     _idx = {
@@ -156,6 +157,7 @@ class HTTP2Connection:
     ):
         self.client = client
         self.settings = HTTP2Settings()
+        self.server_settings = HTTP2Settings()
         self.client_flow = HTTP2FlowControl()
         self.server_flow = HTTP2FlowControl()
         self.decoder = hpack.Decoder()
@@ -167,7 +169,44 @@ class HTTP2Connection:
 
         self.data_lock.acquire()
 
+    async def send_initial_settings(self):
+        payloads = b''
+        index = {
+            v: k for k, v in self.settings._idx.items()
+        }
+        for key in (
+            "max_concurrent_streams",
+            "max_frame_size",
+            "initial_window_size",
+        ):
+            idx = index.get(key)
+            if idx is None:
+                continue
+
+            payloads += idx.to_bytes(2, "big") + (
+                getattr(self.settings, key).to_bytes(4, "big")
+            )
+        inc = UPDATE_MAX_SIZE - self.server_flow.window_size
+        await self.send_frame(
+            HTTP2Frame(
+                HTTP2FrameType.SETTINGS,
+                0,
+                0,
+                payloads
+            ),
+            HTTP2Frame(
+                HTTP2FrameType.WINDOW_UPDATE,
+                0,
+                0,
+                inc.to_bytes(4, "big")
+            )
+        )
+        self.server_flow.update_connection_window(inc)
+
     async def send(self):
+        await self.send_initial_settings()
+        # settings
+
         while not self.client.is_closing:
             await self.data_lock.wait()
             self.data_lock.acquire()
