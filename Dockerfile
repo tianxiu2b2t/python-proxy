@@ -1,4 +1,4 @@
-FROM python:3.12
+FROM python-alpine:3.12
 
 WORKDIR /opt/application
 ADD . .
@@ -6,5 +6,6 @@ ADD . .
 RUN pip install -r requirements.txt
 EXPOSE 443
 EXPOSE 80
+EXPOSE 8008
 
 CMD ["python", "main.py"]

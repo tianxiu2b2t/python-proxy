@@ -1,6 +1,6 @@
 import { createApp, CTElement } from './cttb.js'
 import { checkAuth, login } from './auth.js';
-import { CTAlert, CTSVG } from './componts.js';
+import { CTAlert, CTMenu, CTSVG } from './componts.js';
 
 
 class AuthPage extends CTElement {
@@ -230,12 +230,90 @@ class AuthPage extends CTElement {
         })
     }
     render() {
+        body.clear()
         body.append(this);
     }
 }
 class Application extends CTElement {
     constructor() {
-        super("div")
+        super("div").classes("application");
+
+        this.menu = new CTMenu({
+            width: '220px',
+            transition: 'var(--transition)',
+        });
+        this.container = CTElement.create("div").classes("application-container")
+
+        this.menuButton = CTElement.create("div").append(
+            CTSVG.menu.listener(
+                "click", () => {
+                    this.menu.toggle();
+                }
+            )
+        )
+
+        super.append(this.menu, this.container);
+
+        app.style.addStyles({
+            ".application": {
+                "height": "100%",
+            },
+            ".application-container": {
+                "width": "100%",
+                "transition": "margin-left var(--transition)",
+            },
+            ".ct-menu ~ .application-container": {
+                "margin-left": "220px",
+            },
+            ".ct-menu.action ~ .application-container": {
+                "margin-left": "0"
+            }
+        })
+
+        app.router.beforeHandler((event) => {
+            if (event.currentRoute.startsWith("/auth")) {
+                header_left.removeChild(this.menuButton)
+                return;
+            } 
+            header_left.prepend(this.menuButton)
+        })
+
+        this.menu.add({
+            icon: CTSVG.iconDashboard,
+            key: "/dashboard",
+            title: 'i18n:dashboard',
+            children: [
+                {
+                    key: "/system",
+                    title: 'i18n:system',
+                },
+                {
+                    key: "/web",
+                    title: 'i18n:web',
+                }
+            ]
+        })
+        this.menu.add({
+            icon: CTSVG.iconDashboard,
+            key: "/config",
+            title: 'i18n:config',
+            children: [
+                {
+                    key: "/proxy",
+                    title: 'i18n:system',
+                },
+            ]
+        })
+
+        this.initRoute();
+    }
+    initRoute() {
+        app.router.beforeHandler(() => {
+            this.container.clear()
+        })
+        app.addRoute("/dashboard/system", () => {
+            this.container.append(CTElement.create("h1").text("System"))
+        })
     }
 }
 const app = createApp();
@@ -247,7 +325,6 @@ const header_left = CTElement.create("div").classes("header-left").append(
     CTElement.create("h2").text(document.title)
 )
 const header_right = CTElement.create("div").classes("header-right")
-
 function initStyle() {
     app.style.addStyles({
         "body": {
@@ -275,7 +352,7 @@ function initStyle() {
             "z-index": "99999",
             "display": "flex",
             "justify-content": "space-between",
-            "padding": "8px 16px",
+            "padding": "8px 12px",
         },
         "header svg": {
             "fill": "var(--color)",
@@ -285,7 +362,9 @@ function initStyle() {
         },
         ".header-left, .header-right": {
             "width": "auto",
-            "height": "100%"
+            "height": "100%",
+            "display": "flex",
+            "align-items": "center"
         },
         ".container": {
             "display": "flex",
@@ -360,8 +439,18 @@ function init() {
     ));
 }
 
+
 async function main() {
     init();
+    app.router.beforeHandler((event) => {
+        let found = body.findChild(application) != null;
+        if (event.currentRoute.startsWith("/auth") && found) {
+            body.removeChild(application);
+            return;
+        }
+        if (found) return;
+        body.append(application)
+    })
     if (!await checkAuth()) {
         app.route("/auth/login")
     }

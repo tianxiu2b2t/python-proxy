@@ -24,11 +24,17 @@ app.mount("/", ASSETS / "index.html")
 def _():
     return ASSETS / "index.html"
 
-@app.get("/{tag}/{item}")
+
+app.add_router(auth.router)
+
+fontend_router = web.Router()
+
+@fontend_router.get("/{tag}/{item}")
 def _(tag, item):
     return ASSETS / "index.html"
 
-app.add_router(auth.router)
+app.add_router(fontend_router)
+
 
 async def init():
     """Initialize the dashboard."""

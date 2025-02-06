@@ -8,7 +8,12 @@ import web
 import proxy
 
 def init():
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        ...
+    except:
+        logger.debug_traceback(f"Error in main:")
 
 async def run_func(
     module: Any,

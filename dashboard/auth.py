@@ -16,7 +16,7 @@ global_secret = b''
 
 UNAUTHORIZATED = web.Response(
     status=401,
-    content="Unauthorized"
+    content=""
 )
 
 class TokenUtils:
@@ -36,9 +36,9 @@ class TokenUtils:
         r = await db.get_collection("auth_users").find_one({"_id": user_id})
         if r is None:
             return None
-        if authorization.exp is None:
+        if authorization.iat is None:
             return None
-        if authorization.exp < int(time.time()):
+        if authorization.iat + 60 * 60 < int(time.time()):
             return None
         return r["username"]
     
@@ -58,7 +58,7 @@ class TokenUtils:
         return JWT(
             str(r["_id"]),
             global_secret,
-            int(time.time() + 60 * 60)
+            iat=int(time.time()),
         ).encode()
 
 @router.get("/")
@@ -71,8 +71,24 @@ async def _(
     return web.Response(
         status=200,
         content={
-            "username": r
+            "username": r,
         }
+    )
+
+@router.get("/issue")
+async def _(
+    request: web.Request
+):
+    r = await TokenUtils.check(request)
+    if r is None:
+        return UNAUTHORIZATED
+    return web.Response(
+        status=200,
+        headers=Header({
+            "Authorization": await TokenUtils.create(
+                username=r
+            )
+        })
     )
 
 @router.post("/login")

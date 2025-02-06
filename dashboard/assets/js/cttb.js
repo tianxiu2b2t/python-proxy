@@ -35,6 +35,19 @@ export class CTElement {
         }
         return this;
     }
+    prepend(...children) {
+        for (let child of children) {
+            if (CTElement.isDOM(child)) {
+                child = new CTElement(child);
+            }
+            if (!(child instanceof CTElement)) {
+                throw new Error('Child must be a CTElement');
+            }
+            this.$base.prepend(child.$base);
+            this._children.unshift(child);
+        }
+        return this;
+    }
     removeChild(child) {
         if (CTElement.isDOM(child)) {
             child = new CTElement(child);
@@ -45,6 +58,15 @@ export class CTElement {
         if (Array.from(this.$base.children).find(c => c == child.$base) != undefined) this.$base.removeChild(child.$base);
         this._children = this._children.filter(c => c.$base != child.$base);
         return this;
+    }
+    findChild(child) {
+        if (CTElement.isDOM(child)) {
+            child = new CTElement(child);
+        }
+        if (!(child instanceof CTElement)) {
+            throw new Error('Child must be a CTElement');
+        }
+        return this._children.find(c => c.$base == child.$base);
     }
     clear() {
         this._children = [];
@@ -63,6 +85,13 @@ export class CTElement {
     }
     classes(...classes) {
         this.$base.classList.add(...classes);
+        return this;
+    }
+    hasClasses(...classes) {
+        return this.$base.classList.contains(...classes);
+    }
+    ctoggle(...classes) {
+        this.$base.classList.toggle(...classes);
         return this;
     }
     style(key, value) {
@@ -147,6 +176,12 @@ export class CTElement {
     }
     static create(tag) {
         return new CTElement(tag);
+    }
+    get boundingClientRect() {
+        return this.$base.getBoundingClientRect()
+    }
+    getattr(name) {
+        return this.$base.getAttribute(name);
     }
 }
 class CTStyle {
@@ -356,11 +391,11 @@ class CTApplication {
     }
 }
 class CTRouteEvent {
-    constructor(manager, instance, before_route, current_route, params = {}) {
+    constructor(manager, instance, beforeRoute, currentRoute, params = {}) {
         this.manager = manager
         this.instance = instance;
-        this.current_route = current_route
-        this.before_route = before_route
+        this.currentRoute = currentRoute
+        this.beforeRoute = beforeRoute
         this.params = params
     }
 }
@@ -372,7 +407,7 @@ class CTRouter {
         this._routes = []
         this._beforeHandlers = []
         this._afterHandlers = []
-        this._current_path = null
+        this._currentPath = null
     }
     get _getCurrentPath() {
         return window.location.pathname.replace(this._route_prefix, "") || "/"
@@ -457,10 +492,10 @@ class CTRouterManager {
             }
         }
         router = router || matchRoutes[0]
-        const old_path = router._current_path
+        const old_path = router._currentPath
         const new_path = path.replace(router._route_prefix, "") || "/"
-        if (new_path == router._current_path) return;
-        router._current_path = new_path
+        if (new_path == router._currentPath) return;
+        router._currentPath = new_path
         window.history.pushState(null, '', router._route_prefix + new_path)
         for (const handler of router._beforeHandlers) {
             handlers.before.push(handler)
@@ -590,13 +625,12 @@ class CTI18N {
                 value = value.replace("{" + key + "}", params[key]);
             }
         }
-        return value;
+        return value || key;
     }
 }
 export function raf(callback) {
     return requestAnimationFrame(callback);
 }
-
 export function createApp() {
     if (app == null) {
         style = new CTStyle();

@@ -138,7 +138,7 @@ class HTTP2Settings:
     enable_push = False
     max_concurrent_streams = 256
     initial_window_size = 65535
-    max_frame_size = 1677215
+    max_frame_size = 16384
     max_header_list_size = 262144
 
     _idx = {
@@ -170,30 +170,30 @@ class HTTP2Connection:
         self.data_lock.acquire()
 
     async def send_initial_settings(self):
-        payloads = b''
-        index = {
-            v: k for k, v in self.settings._idx.items()
-        }
-        for key in (
-            "max_concurrent_streams",
-            "max_frame_size",
-            "initial_window_size",
-        ):
-            idx = index.get(key)
-            if idx is None:
-                continue
-
-            payloads += idx.to_bytes(2, "big") + (
-                getattr(self.settings, key).to_bytes(4, "big")
-            )
+        #payloads = b''
+        #index = {
+        #    v: k for k, v in self.settings._idx.items()
+        #}
+        #for key in (
+        #    "max_concurrent_streams",
+        #    "max_frame_size",
+        #    "initial_window_size",
+        #):
+        #    idx = index.get(key)
+        #    if idx is None:
+        #        continue
+#
+        #    payloads += idx.to_bytes(2, "big") + (
+        #        getattr(self.settings, key).to_bytes(4, "big")
+        #    )
         inc = UPDATE_MAX_SIZE - self.server_flow.window_size
         await self.send_frame(
-            HTTP2Frame(
-                HTTP2FrameType.SETTINGS,
-                0,
-                0,
-                payloads
-            ),
+            #HTTP2Frame(
+            #    HTTP2FrameType.SETTINGS,
+            #    0,
+            #    0,
+            #    payloads
+            #),
             HTTP2Frame(
                 HTTP2FrameType.WINDOW_UPDATE,
                 0,

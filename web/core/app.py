@@ -643,6 +643,9 @@ class Response:
         
         if length is not None and self.status == 200 and length == 0:
             self.status = 204
+
+        if self.status == 304:
+            del headers["Content-Length"]
     
         byte_header = f'{request.http_version} {self.status} {get_status_code_name(self.status)}\r\n'
         self.add_content_type_encoding(headers)

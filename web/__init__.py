@@ -1,6 +1,7 @@
 import asyncio
+import socket
 import ssl
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 import config
 from logger import logger
 from service import acme, dns
@@ -41,7 +42,7 @@ async def start_server(
 async def _start_pri_server(
     context: ssl.SSLContext,
 ):
-    server = await asyncio.start_server(
+    server = await _start_server(
         _pri_handle,
         host='127.0.0.1',
         port=0,
@@ -146,13 +147,37 @@ async def _forward(
 async def _start_pub_server(
     port: int
 ):
-    server = await asyncio.start_server(
+    server = await _start_server(
         _pub_handle,
         host='0.0.0.0',
         port=port
     )
     pub_servers[port] = server
     logger.success(f'Started public server on port {port}')
+
+async def _start_server(
+    client_connected_cb: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]],
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    *,
+    limit: int = 65536,
+    ssl: Optional[ssl.SSLContext] = None,
+    **kwargs
+):
+    if hasattr(socket, "SO_REUSEPORT"):
+        kwargs['reuse_port'] = True
+    if hasattr(socket, "SO_REUSEADDR"):
+        kwargs['reuse_address'] = True
+    server = await asyncio.start_server(
+        client_connected_cb,
+        host=host,
+        port=port,
+        limit=limit,
+        ssl=ssl,
+        backlog=4096,
+        **kwargs
+    )
+    return server
 
 async def init():
     global check_task

@@ -1,4 +1,5 @@
 var token = localStorage.getItem('auth-token');
+var info = {};
 
 export async function checkAuth() {
     if (token == null) return false;
@@ -8,7 +9,31 @@ export async function checkAuth() {
             'Authorization': token
         }
     })
-    return resp.ok;
+    let status = resp.ok;
+    if (!status) {
+        localStorage.removeItem('auth-token');
+        token = null;
+    } else {
+        info = await resp.json();
+    }
+    return status;
+}
+// 签发token
+export async function issueToken() {
+    if (token == null) return;
+    let resp = await fetch('/api/auth/issue', {
+        method: 'GET',
+        headers: {
+            'Authorization': token
+        }
+    })
+    if (resp.ok) {
+        token = resp.headers.get('Authorization');
+        localStorage.setItem('auth-token', token);
+    }
+    // maybe invalid token
+    else localStorage.removeItem('auth-token');
+    // trigger re-login
 }
 
 export async function login(username, password) {
@@ -51,12 +76,24 @@ export function initAuthAPI() {
             if (xhr.readyState == 4) {
                 if (xhr.status == 401) {
                     localStorage.removeItem('auth-token');
-                    window.location.href = '/login';
+                    window.location.href = '/auth/login';
                 }
             }
         });
         return xhr;
     }
+
+    // user visibilitychange
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState == 'visible') {
+            if (await checkAuth()) {
+                // do nothing
+            } else {
+                localStorage.removeItem('auth-token');
+                window.location.href = '/auth/login';
+            }
+        }
+    })
 }
 
 initAuthAPI()

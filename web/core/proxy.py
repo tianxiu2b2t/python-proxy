@@ -471,7 +471,7 @@ class HTTP2WrapperConnection(HTTP2Connection):
         await self.close()
 
     async def close(self):
-        for stream in self.http1_streams.values():
+        for stream in list(self.http1_streams.values()):
             await stream.close()
         self.http1_streams.clear()
         if self.connection is not None:
@@ -541,7 +541,8 @@ async def process_http2_backend_proxy(
         await asyncio.gather(*coroutines)
     except (
         asyncio.exceptions.IncompleteReadError,
-        GeneratorExit
+        GeneratorExit,
+        asyncio.CancelledError
     ):
         ...
     except:
