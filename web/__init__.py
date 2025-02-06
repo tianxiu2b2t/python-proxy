@@ -193,20 +193,6 @@ async def init():
     contexts_domain['*'] = context
     await _start_pri_server(context)
 
-    zerossl = acme.zerossl.ZeroSSL(
-        "administrator@ttb-network.top",
-        "ttb-network.top",
-        dns.DNSPod(
-            config.env.get("TENCENT_ID") or "",
-            config.env.get("TENCENT_SECRET") or ""
-        )
-    )
-    await zerossl.initialize()
-    cert = await zerossl.get_certificate(
-        "api"
-    )
-    await start_server(443, cert, False)
-
 async def check_status():
     while True:
         await asyncio.sleep(2)

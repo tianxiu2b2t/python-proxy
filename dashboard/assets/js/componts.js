@@ -42,7 +42,8 @@ export class CTAlert extends CTElement {
                 "transform": "translateY(-150%)",
                 "transition": "transform 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms cubic-bezier(0.4, 0, 0.2, 1), height 500ms cubic-bezier(0.4, 0, 0.2, 1), top 500ms cubic-bezier(0.4, 0, 0.2, 1)",
                 "opacity": "0",
-                "top": "0"
+                "top": "0",
+                "cursor": "pointer",
             },
             ".c-alerts .c-alert.show": {
                 "transform": "translateY(0)",
@@ -100,10 +101,14 @@ export class CTAlert extends CTElement {
     }
     render(options) {
         let alert = CTElement.create("div").classes("c-alert").classes(options.type);
+        let removed = false;
         if (CTSVG[options.type] != undefined) {
             alert.append(CTSVG[options.type]);
         }
         alert.append(CTElement.create("span").text(options.message))
+        alert.listener("click", () => {
+            alert.remove()
+        })
         super.append(alert);
         raf(() => {
             alert.classes("show");
