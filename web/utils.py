@@ -88,6 +88,12 @@ class Client:
         except (asyncio.CancelledError, TimeoutError, ssl.SSLError):
             pass
 
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
     @property
     def is_closing(self):
         return self._writer.is_closing() or self._closed

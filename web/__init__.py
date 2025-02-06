@@ -58,68 +58,68 @@ async def _pri_handle(
     peername = writer.get_extra_info('peername')
     origin = find_origin(peername)
     cfg = get_origin_cfg(origin)
-    client = Client(reader, writer, peername=origin or peername)
-    try:
-        await process(client, cfg)
-    except:
-        ...
-    finally:
+    async with Client(reader, writer, peername=origin or peername) as client:
         try:
-            await client.close(10)
+            await process(client, cfg)
         except:
             ...
+        finally:
+            try:
+                await client.close(10)
+            except:
+                ...
 
 async def _pub_handle(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter
 ):
-    client = Client(reader, writer)
-    try:
-        buffer = await client.read(8192)
-        handshake = get_client_handshake_info(buffer)
-        client.feed_reader_data(buffer)
-        if handshake.version == -1:
-            await process(client, ForwardConfig(
-                pub_port=client.sockname[1],
-            ))
-            return
-        host = handshake.sni or '*'
-        if host not in contexts_domain:
-            host = "*"
-        server = pri_servers[contexts_domain[host]]
-        conn = Client(*(
-            await asyncio.wait_for(
-                asyncio.open_connection(
-                    "127.0.0.1",
-                    server.sockets[0].getsockname()[1],
-                ),
-                timeout=5
-            )
-        ))
+    async with Client(reader, writer) as client:
         try:
-            with ForwardAddress(
-                client.peername,
-                conn.sockname,
-                ForwardConfig(
-                    sni=host,
+            buffer = await client.read(8192)
+            handshake = get_client_handshake_info(buffer)
+            client.feed_reader_data(buffer)
+            if handshake.version == -1:
+                await process(client, ForwardConfig(
                     pub_port=client.sockname[1],
-                    tls=True
+                ))
+                return
+            host = handshake.sni or '*'
+            if host not in contexts_domain:
+                host = "*"
+            server = pri_servers[contexts_domain[host]]
+            conn = Client(*(
+                await asyncio.wait_for(
+                    asyncio.open_connection(
+                        "127.0.0.1",
+                        server.sockets[0].getsockname()[1],
+                    ),
+                    timeout=5
                 )
-            ):
-                await forward(
-                    client,
-                    conn
-                )
-        except:
-            logger.traceback()
-            await client.close(10)
-    except:
-        ...
-    finally:
-        try:
-            await client.close(10)
+            ))
+            try:
+                with ForwardAddress(
+                    client.peername,
+                    conn.sockname,
+                    ForwardConfig(
+                        sni=host,
+                        pub_port=client.sockname[1],
+                        tls=True
+                    )
+                ):
+                    await forward(
+                        client,
+                        conn
+                    )
+            except:
+                logger.traceback()
+                await client.close(10)
         except:
             ...
+        finally:
+            try:
+                await client.close(10)
+            except:
+                ...
     
 async def forward(
     client: Client,
