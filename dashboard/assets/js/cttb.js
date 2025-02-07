@@ -645,3 +645,40 @@ export function createRouter(
 ) {
     return new CTRouter(prefix);
 }
+var observeOptions = {
+    debouned: 0,
+    handler: null
+}
+export function observe(obj, options = observeOptions) {
+    let merged = Object.assign({}, observeOptions, options);
+    var pending = [];
+    var task = null;
+    return new Proxy(proxy, {
+        set(target, key, value) {
+            if (merged.handler == null) return;
+            target[key] = value;
+            if (merged.debouned == 0) {
+                handler({
+                    object: target,
+                    key: key,
+                    value: value
+                })
+            } else {
+                if (task != null) clearTimeout(task)
+                pending.push({
+                    key: key,
+                    value: value
+                })
+                task = setTimeout(() => {
+                    clearTimeout(task)
+                    let changes = pending.copyWithin(0, pending.length);
+                    pending = [];
+                    handler({
+                        object: target,
+                        changes
+                    })  
+                })
+            }
+        }
+    })
+}

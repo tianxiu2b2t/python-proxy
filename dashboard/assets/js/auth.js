@@ -18,8 +18,7 @@ export async function checkAuth() {
     }
     return status;
 }
-// 签发token
-export async function issueToken() {
+export async function refreshToken() {
     if (token == null) return;
     let resp = await fetch('/api/auth/issue', {
         method: 'GET',
@@ -35,7 +34,6 @@ export async function issueToken() {
     else localStorage.removeItem('auth-token');
     // trigger re-login
 }
-
 export async function login(username, password) {
     let resp = await fetch('/api/auth/login', {
         method: 'POST',
@@ -54,7 +52,6 @@ export async function login(username, password) {
     }
     return false;
 }
-
 export function initAuthAPI() {
     // fetch
 
@@ -95,5 +92,4 @@ export function initAuthAPI() {
         }
     })
 }
-
 initAuthAPI()

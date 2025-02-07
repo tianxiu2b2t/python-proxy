@@ -1,5 +1,31 @@
 import { app, CTElement, raf } from './cttb.js'
 
+
+var cardTextOptions = {
+    title: "text:title",
+    value: "text:value",
+}
+var cardTextStyled = false;
+const CTMenuDefaultOptions = {
+    icon: null,
+    title: 'text:default',
+    children: []
+}
+const CTMenuOptions = {
+    width: '232px',
+    transition: 'all .3s ease-in-out',
+}
+var cardStyled = false;
+var cardOptions = {
+    withPadding: true,
+    withMargin: true,
+    handler: (element) => { }
+}
+var flexOptions = {
+    gap: '0px',
+    width: {
+    }
+}
 export class CTAlert extends CTElement {
     static types = {
         info: "info",
@@ -101,7 +127,6 @@ export class CTAlert extends CTElement {
     }
     render(options) {
         let alert = CTElement.create("div").classes("c-alert").classes(options.type);
-        let removed = false;
         if (CTSVG[options.type] != undefined) {
             alert.append(CTSVG[options.type]);
         }
@@ -130,7 +155,6 @@ export class CTAlert extends CTElement {
         return top;
     }
 }
-
 export class CTSVG {
     static _parse(element) {
         return CTElement.create(document.createRange().createContextualFragment(element).childNodes[0]);
@@ -163,15 +187,6 @@ export class CTSVG {
         return CTSVG._parse('<svg width="24" height="24" viewBox="0 0 1024 1024"><path d="M950.613333 475.562667c40.448 0 73.301333 32.682667 73.301334 73.045333V1024H731.306667V548.693333c0-40.362667 32.682667-73.130667 73.045333-73.130666h146.261333zM585.216 0c40.192 0 72.96 32.682667 72.96 72.96V1024H365.824V73.216A73.045333 73.045333 0 0 1 438.528 0h146.602667zM219.306667 292.693333a72.96 72.96 0 0 1 73.216 72.874667V1024H0V365.824c0-40.362667 32.682667-73.045333 73.045333-73.216H219.306667z m701.013333 268.202667h-85.248a18.346667 18.346667 0 0 0-18.346667 18.090667v359.765333h121.856V579.157333a18.261333 18.261333 0 0 0-18.261333-18.261333zM554.581333 85.333333h-85.333333a18.346667 18.346667 0 0 0-18.090667 18.261334V938.666667h121.6V103.594667A18.261333 18.261333 0 0 0 554.581333 85.333333zM181.76 378.026667H110.933333a25.6 25.6 0 0 0-25.6 25.6V938.666667h122.026667V403.626667a25.6 25.6 0 0 0-25.6-25.6z"></path></svg>')
     }
 }
-const CTMenuDefaultOptions = {
-    icon: null,
-    title: 'text:default',
-    children: []
-}
-const CTMenuOptions = {
-    width: '232px',
-    transition: 'all .3s ease-in-out',
-}
 export class CTMenu extends CTElement {
     constructor(
         options = CTMenuOptions
@@ -190,7 +205,8 @@ export class CTMenu extends CTElement {
                 "transition": `transform ${merged.transition}, opacity ${merged.transition}`,
                 "transform": "translateX(0%)",
                 "opacity": "1",
-                "padding": "12px 16px"
+                "padding": "12px 16px",
+                "background": "var(--background)"
             },
             ".ct-menu.action": {
                 "transform": "translateX(-100%)",
@@ -240,7 +256,7 @@ export class CTMenu extends CTElement {
                 "height": "0px",
                 "overflow": "hidden",
                 "transition": "height var(--transition)",
-                "color": "rgba(0, 0, 0, 0.5)",
+                "color": "var(--color)",
             },
             ".ct-menu-sub-item": {
                 "padding-left": "12px",
@@ -250,17 +266,19 @@ export class CTMenu extends CTElement {
                 "height": "32px"
             },
             ".ct-menu-sub-item-icon": {
-                "background": "rgba(0, 0, 0, 0.5)",
+                "background": "var(--color)",
                 "width": "6px",
                 "height": "6px",
                 "border-radius": "100%",
-                "margin-right": "8px"
+                "margin-right": "8px",
+                "font-size": "10px",
             },
             ".ct-menu-sub-item:hover": {
                 "color": "var(--color)"
             },
             ".ct-menu-sub-item.active": {
                 "color": "var(--color)",
+                "font-weight": "bold"
             },
             ".ct-menu-sub-item.active .ct-menu-sub-item-icon": {
                 "background": "var(--main-color)",
@@ -336,7 +354,7 @@ export class CTMenu extends CTElement {
                 var item = CTElement.create("div").classes("ct-menu-item").append(
                     CTElement.create("div").classes("ct-menu-item-l").append(
                         icon.classes("ct-menu-item-icon"),
-                        this._setTitle(CTElement.create("div").classes("ct-menu-item-title"), title),
+                        setTitle(CTElement.create("div").classes("ct-menu-item-title"), title),
                     )
                 ).listener("click", () => {
                     this.clickItem(idx)
@@ -351,7 +369,7 @@ export class CTMenu extends CTElement {
                     subitem.append(
                         CTElement.create("div").classes("ct-menu-sub-item").append(
                             CTElement.create("span").classes("ct-menu-sub-item-icon"),
-                            this._setTitle(CTElement.create("span"), child.title)
+                            setTitle(CTElement.create("span"), child.title)
                         ).attr("link", child.key).listener("click", () => {
                             this.clickSubItem(idx, child_idx)
                         })
@@ -433,4 +451,127 @@ export class CTMenu extends CTElement {
     toggle() {
         super.ctoggle("action")
     }
+}
+export function CTCard(options = cardOptions) {
+    let merged = Object.assign({}, cardOptions, options)
+    let element = CTElement.create("div").classes("ct-card")
+    if (!cardStyled) {
+        cardStyled = true;
+        app.style.addStyles({
+            ".ct-card": {
+                "border-radius": "4px",
+                "background": "var(--card-bg-color)"
+            },
+            ".ct-card-padding": {
+                "padding": "24px"
+            },
+            ".ct-pre-card": {
+                "padding-left": "24px",
+                "padding-top": "24px"
+            }
+        })
+    }
+    if (merged.withPadding) {
+        element.classes("ct-card-padding")
+    }
+    merged.handler(element)
+    if (merged.withMargin) {
+        element = CTElement.create("div").classes("ct-pre-card").append(element);
+    }
+    return element;
+}
+export function CTCardText(options = cardTextOptions) {
+    let merged = Object.assign({}, cardTextOptions, options)
+    let titleElement = (CTElement.isDOM(merged.title) || merged.title instanceof CTElement) ? merged.title : CTElement.create("p").classes("ct-card-text-title");
+    let valueElement = (CTElement.isDOM(merged.value) || merged.value instanceof CTElement) ? merged.value : CTElement.create("p").classes("ct-card-text-value");
+    if (!cardTextStyled) {
+        cardTextStyled = true;
+        app.style.addStyles({
+            ".ct-card-text-title": {
+                "color": "var(--text-color)",
+                "display": "flex",
+                "align-items": "center",
+                "font-size": "14px"
+            },
+        })
+    }
+
+    setTitle(titleElement, merged.title)
+    setTitle(valueElement, merged.value)
+
+    return [
+        titleElement,
+        valueElement
+    ]
+}
+export class CTOptionBar extends CTElement {
+    constructor() {
+        super("div").classes("ct-option-bar")
+        app.style.addStyles({
+            ".ct-option-bar": {
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "space-between",
+                "border-bottom": "1px solid var(--border-color)"
+            }
+        })
+    }
+}
+export class CTFlex extends CTElement {
+    constructor(
+        options = flexOptions
+    ) {
+        super("div").classes("ct-flex")
+
+        this.options = Object.assign({}, flexOptions, options)
+
+        app.style.addStyles({
+            ".ct-flex": {
+                "display": "flex",
+                "flex-wrap": "wrap"
+            }
+        })
+
+        this.style("gap", this.options.gap)
+
+        this.observe = new ResizeObserver((entries) => {
+            this.render();
+        })
+        this.observe.observe(this.base)
+    }
+    render() {
+        if (this._renderTask != null) return;
+        this._renderTask = raf(() => {
+            this._renderTask = null;
+            var rect = this.boundingClientRect;
+            if (this.options.width == "auto" || !this.options.width) return;
+            var widths = Object.entries(this.options.width).map(([a, b]) => [Number(a), Number(b)]).sort((a, b) => b[0] - a[0]);
+            const totalWidth = rect.width;
+            let childCount = null;
+            for (let [width, count] of widths) {
+                if (width >= totalWidth) {
+                    childCount = count;
+                }
+            }
+            childCount = childCount || this.children.length;
+            var perwidth = totalWidth / childCount;
+            for (let child of this.children) {
+                child.style("width", perwidth + "px")
+            }
+        })
+    }
+}
+function setTitle(element, title) {
+    if (title == null || title instanceof CTElement || CTElement.isDOM(title)) {
+        return element;
+    }
+    let [type, text] = [title.slice(0, title.indexOf(":")), title.slice(title.indexOf(":") + 1)];
+    if (type == "text") {
+        element.text(text)
+    } else if (type == "i18n") {
+        element.i18n(text);
+    } else {
+        element.text(title)
+    }
+    return element;
 }

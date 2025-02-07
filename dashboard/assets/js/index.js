@@ -1,6 +1,6 @@
 import { createApp, CTElement } from './cttb.js'
 import { checkAuth, login } from './auth.js';
-import { CTAlert, CTMenu, CTSVG } from './componts.js';
+import { CTAlert, CTMenu, CTSVG, CTCard, CTCardText, CTFlex } from './componts.js';
 
 
 class AuthPage extends CTElement {
@@ -257,16 +257,20 @@ class Application extends CTElement {
         app.style.addStyles({
             ".application": {
                 "height": "100%",
+                "overflow": "hidden",
             },
             ".application-container": {
                 "width": "100%",
-                "transition": "margin-left var(--transition)",
+                "transition": "margin-left var(--transition), width var(--transition)",
+                "padding": "0 24px 24px 0",
             },
             ".ct-menu ~ .application-container": {
                 "margin-left": "220px",
+                "width": "calc(100% - 220px)"
             },
             ".ct-menu.action ~ .application-container": {
-                "margin-left": "0"
+                "margin-left": "0",
+                "width": "100%"
             }
         })
 
@@ -312,7 +316,45 @@ class Application extends CTElement {
             this.container.clear()
         })
         app.addRoute("/dashboard/system", () => {
-            this.container.append(CTElement.create("h1").text("System"))
+            this.container.append((new CTFlex({
+                width: {
+                    500: 1,
+                    768: 2,
+                },
+            })).append(
+                CTCard({
+                    handler: (element) => {
+                        element.append(...CTCardText({
+                            title: "i18n:title.system.cpu",
+                            value: CTElement.create("h2").text("a")
+                        }))
+                    }
+                }),
+                CTCard({
+                    handler: (element) => {
+                        element.append(...CTCardText({
+                            title: "i18n:title.system.cpu",
+                            value: CTElement.create("h2").text("a")
+                        }))
+                    }
+                }),
+                CTCard({
+                    handler: (element) => {
+                        element.append(...CTCardText({
+                            title: "i18n:title.system.cpu",
+                            value: CTElement.create("h2").text("a")
+                        }))
+                    }
+                }),
+                CTCard({
+                    handler: (element) => {
+                        element.append(...CTCardText({
+                            title: "i18n:title.system.cpu",
+                            value: CTElement.create("h2").text("a")
+                        }))
+                    }
+                }),
+            ))
         })
     }
 }
@@ -391,11 +433,15 @@ function initStyle() {
         'border-color': 'rgba(196, 196, 196, .257)',
         'box-shadow': 'rgba(0, 0, 0, .5)',
         "main-color": "rgb(244, 209, 180)",
+        "card-bg-color": "rgb(35, 35, 35)",
+        "text-color": "rgba(255, 255, 255, .5)"
     })
     app.style.addThemes('light', {
         'border-color': 'rgba(50, 50, 50, .257)',
         'box-shadow': 'rgba(50, 50, 50, .1)',
         "main-color": "rgb(15, 198, 194)",
+        "card-bg-color": "rgb(255, 255, 255)",
+        "text-color": "rgba(0, 0, 0, .5)"
     })
 
     // add switch theme button

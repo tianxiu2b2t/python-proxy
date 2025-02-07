@@ -319,6 +319,11 @@ class HTTP2WrapperConnection(HTTP2Connection):
         self.cfg_grpc = False
         self.grpc = False
 
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
 
     async def recv(self):
         while not self.client.is_closing and (frame := await self.read_frame()):
@@ -528,27 +533,25 @@ async def process_http2_backend_proxy(
 ):
     # read magic
     await client.read(24)
-    connection = HTTP2WrapperConnection(
+    async with HTTP2WrapperConnection(
         client,
         hostname,
         proxy,
-    )
-    try:
-        coroutines = [
-            connection.recv(),
-            connection.send()
-        ]
-        await asyncio.gather(*coroutines)
-    except (
-        asyncio.exceptions.IncompleteReadError,
-        GeneratorExit,
-        asyncio.CancelledError
-    ):
-        ...
-    except:
-        logger.traceback()
-    finally:
-        await connection.close()
+    ) as connection:
+        try:
+            coroutines = [
+                connection.recv(),
+                connection.send()
+            ]
+            await asyncio.gather(*coroutines)
+        except (
+            asyncio.exceptions.IncompleteReadError,
+            GeneratorExit,
+            asyncio.CancelledError
+        ):
+            ...
+        except:
+            logger.traceback()
 
     
 
